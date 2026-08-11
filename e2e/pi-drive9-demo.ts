@@ -440,11 +440,21 @@ test("large Drive9 Pi fixture", () => {
     throw new Error("bounded result tools injected the full result");
   }
   const beforeRollback = preEmissionProof;
-  const shellDelete = await env.exec(`/bin/rm -rf -- ${JSON.stringify(evidenceRoot)}`, {
+  const tenantRootEvidenceAddress = posix.join(mountPoint, evidenceRoot.slice(1));
+  const shellDeleteControl = posix.join(tenantRootEvidenceAddress, `.delete-control-${randomUUID()}`);
+  const controlWrite = await env.writeFile(shellDeleteControl, "workspace delete control");
+  if (!controlWrite.ok) throw controlWrite.error;
+  const shellDelete = await env.exec(`/bin/rm -rf -- ${JSON.stringify(tenantRootEvidenceAddress)}`, {
     env: commandEnvironment,
     inheritEnv: false,
   });
   if (!shellDelete.ok) throw shellDelete.error;
+  if (shellDelete.value.exitCode !== 0) {
+    throw new Error(`workspace shell delete control failed with ${shellDelete.value.exitCode}`);
+  }
+  const controlExists = await env.exists(shellDeleteControl);
+  if (!controlExists.ok) throw controlExists.error;
+  if (controlExists.value) throw new Error("workspace shell did not delete the mount-addressed control");
   const afterShellDelete = await evidenceProof(
     evidenceClient,
     evidenceRoot,
