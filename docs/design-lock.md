@@ -132,14 +132,36 @@ Drive9 tenant
 ```
 
 The evidence root is configurable because a deployment may place the prefix
-under a project-owned namespace. The invariant is that result files are
-written through the base filesystem client, not through the rollback layer.
+under a project-owned namespace. The following are startup invariants, not
+documentation suggestions:
+
+1. The remote workspace root and remote evidence root are disjoint; neither may
+   contain the other.
+2. The FUSE mount exposes only the workspace remote root. The evidence prefix
+   must not appear anywhere below the local `workspaceRoot`.
+3. The workspace credential has no permission on the evidence prefix. The
+   evidence credential is scoped to that prefix and is held only by
+   `ToolResultStore`.
+4. The evidence credential and remote evidence path are not copied into child
+   process environment variables, Pi tool arguments, or model-visible output.
+5. Configuration fails closed when path overlap or an authorization probe
+   violates these invariants.
+
+Result files are written through the base filesystem client, not through the
+rollback layer or workspace mount.
 
 ### 5.3 Authority boundary
 
 P0 relies on Drive9 tenant and filesystem-prefix authorization plus library
 scope checks. The server does not yet enforce result-level ACLs or WORM. The
 evidence credential must not be exposed to the model or shell environment.
+
+This protects evidence from normal workspace FileSystem/shell paths and from
+the workspace-scoped credential. It is not a sandbox against hostile code that
+can read arbitrary host files or acquire an unrelated tenant-owner credential.
+Deployments must run with an isolated home/config directory and no ambient
+Drive9 owner credential. Strong protection against a hostile host process is a
+future sandbox/server-WORM capability, not a P0 claim.
 
 ## 6. Contract A: `Drive9ExecutionEnv`
 
@@ -485,6 +507,10 @@ Rules:
   the original layer/checkpoint/durable sequence. The test records terminal
   manifest and chunk Drive9 revisions plus SHA-256 values before rollback, then
   proves the same revisions and bytes remain afterward.
+- The local workspace path cannot address the evidence prefix, and a direct
+  read/write/delete probe using the workspace credential is denied while the
+  evidence-scoped client succeeds. Overlapping workspace/evidence roots fail
+  startup.
 
 ### 11.4 Required end-to-end demo
 
