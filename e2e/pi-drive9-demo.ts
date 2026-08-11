@@ -440,6 +440,20 @@ test("large Drive9 Pi fixture", () => {
     throw new Error("bounded result tools injected the full result");
   }
   const beforeRollback = preEmissionProof;
+  const shellDelete = await env.exec(`/bin/rm -rf -- ${JSON.stringify(evidenceRoot)}`, {
+    env: commandEnvironment,
+    inheritEnv: false,
+  });
+  if (!shellDelete.ok) throw shellDelete.error;
+  const afterShellDelete = await evidenceProof(
+    evidenceClient,
+    evidenceRoot,
+    execDetails.resultId,
+    execDetails.chunkCount,
+  );
+  if (JSON.stringify(afterShellDelete) !== JSON.stringify(beforeRollback)) {
+    throw new Error("workspace shell changed evidence outside its mounted root");
+  }
   const boundStat = await store.stat(execDetails.resultId);
   if (boundStat.workspaceBefore?.layerId !== layerId || boundStat.workspaceAfter?.layerId !== layerId) {
     throw new Error("terminal result is missing the LayerFS workspace binding");
@@ -474,6 +488,7 @@ test("large Drive9 Pi fixture", () => {
     readModelBytes: textBytes(readMessage),
     manifestRevision: beforeRollback.manifest.revision,
     chunkRevisions: beforeRollback.chunks.map((chunk) => chunk.revision),
+    workspaceShellDeletePreservedEvidence: true,
     rollbackPreservedEvidence: true,
     crashRecovery,
     integrationFriction: [

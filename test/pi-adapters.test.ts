@@ -126,6 +126,20 @@ function fallbackContext(text: string, isError = false): AfterToolCallContext {
 }
 
 describe("Pi durable result adapters", () => {
+  it("rejects ambient host environment inheritance for model commands", () => {
+    const store = new PersistentToolResultStore({ backend: new MemoryBackend() });
+    assert.throws(
+      () =>
+        createDrive9ExecTool({
+          env: executionEnv(async () => ({ ok: true, value: { stdout: "", stderr: "", exitCode: 0 } })),
+          store,
+          allocateIdentity: allocatorFor(identity(0)),
+          inheritEnvironment: true,
+        }),
+      (error: unknown) => error instanceof ResultStoreError && error.code === "invalid",
+    );
+  });
+
   it("marks a pre-existing drive9_exec attempt unknown and spawns only a fresh attempt", async () => {
     const store = new PersistentToolResultStore({ backend: new MemoryBackend() });
     const old = await store.begin({

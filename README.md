@@ -116,10 +116,9 @@ const afterToolCall = createAfterToolCallFallback({
 });
 ```
 
-`drive9_exec` does not inherit the host environment by default. Supply only
-the command variables it needs through `commandEnvironment`. Setting
-`inheritEnvironment: true` is an explicit weakening; the host must first prove
-that no evidence credential or other integration secret is ambient.
+`drive9_exec` never inherits the ambient host environment and rejects
+`inheritEnvironment: true`. Supply only the command variables it needs through
+`commandEnvironment`.
 
 The fallback offloads all-text tool content only when it exceeds 50 KiB.
 `result_read` and `result_search` enforce the current session identity before

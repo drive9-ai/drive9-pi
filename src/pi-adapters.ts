@@ -297,6 +297,9 @@ async function committedChunkCount(store: ToolResultStore, resultId: string, fal
 }
 
 export function createDrive9ExecTool(options: Drive9ExecToolOptions): AgentTool<typeof drive9ExecParameters, CompactToolResultDetails> {
+  if (options.inheritEnvironment === true) {
+    throw new ResultStoreError("invalid", "drive9_exec cannot inherit the ambient host environment");
+  }
   const maxPendingBytes = configuredInteger(
     options.maxPendingBytes,
     DEFAULT_PENDING_BYTES,
