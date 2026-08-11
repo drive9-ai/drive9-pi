@@ -290,8 +290,8 @@ export interface ResultStat {
   mediaType: "text/plain; charset=utf-8";
   state: ResultState;
   complete: boolean;                  // false for writing/unknown
-  chunkCount: number;
-  totalBytes: number;
+  chunkCount: number;                  // manifest-committed count while writing
+  totalBytes: number;                  // manifest-committed bytes while writing
   totalLines: number;
   sha256?: string;                    // terminal contiguous payload only
   exitCode?: number;
@@ -303,7 +303,7 @@ export interface ResultStat {
 
 export interface ResultWriter {
   readonly resultId: string;
-  readonly nextSeq: number;            // first missing contiguous sequence
+  readonly nextSeq: number;            // current manifest-committed chunk count
   append(input: AppendInput): Promise<void>;
   finalize(input: FinalizeInput): Promise<ResultStat>;
 }
@@ -428,40 +428,70 @@ must never alias it.
 
 Each chunk is an immutable envelope containing schema version, sequence,
 stream label, payload length, payload SHA-256, and base64 payload. The logical
-result body is the concatenation of decoded payloads in sequence order. The
-terminal manifest stores total bytes, total lines, per-stream counts, chunk
-count, whole-result SHA-256, and a sparse byte/line index.
+result body is the concatenation of the manifest-committed prefix in sequence
+order. A chunk object is only a candidate until a writing-manifest CAS commits
+its sequence. Uncommitted candidates are not part of the logical result and
+are ignored by stat, read, search, finalize, and recovery.
+
+The writing manifest stores `committedChunkCount` and `committedTotalBytes`.
+They identify the exact contiguous prefix committed by successful append CAS
+operations. The terminal manifest stores total bytes, total lines, per-stream
+counts, chunk count, whole-result SHA-256, and a sparse byte/line index for that
+committed prefix.
 
 ### 7.4 Write protocol
 
 1. `begin` creates `manifest.json` in `writing` state with
+   `committedChunkCount = 0`, `committedTotalBytes = 0`, and
    `expectedRevision=0`. A successful create returns a writing result with
    `disposition = "created"`.
 2. If creation conflicts, the store reads the manifest. It resumes only when
    schema, full identity, tool name, media type, and immutable workspace-before
    binding match. A well-formed `writing` result returns
-   `disposition = "existing"` and a writer whose `nextSeq` is the first missing
-   contiguous sequence; `nextSeq` does not prove whether an external process
-   already ran. A matching terminal result returns
-   `BeginResult.kind = "terminal"` without rerunning the tool. Trailing chunks
-   after a gap and all identity/schema mismatches fail closed.
-3. `append(seq, ...)` creates the sequence chunk with `expectedRevision=0`.
-4. If chunk creation conflicts, the existing chunk must match sequence, stream,
-   length, and SHA-256. Exact match is an idempotent retry; mismatch is a
-   conflict.
-5. The writer rejects gaps at finalize. It verifies exactly `chunkCount`
-   sequences from zero, rejects trailing chunks, and verifies each chunk hash,
-   total limits, the aggregate digest, and line accounting.
-6. `finalize` CAS-replaces the writing manifest using its observed positive
-   revision. A lost response is safe: retry reads the terminal manifest and
-   succeeds only if the canonical finalize input and aggregate digest match.
-7. Terminal manifests and chunks are never changed by the library.
-8. A crash before terminal CAS leaves `writing`. Calling `begin` with the same
-   identity may resume deterministic append/finalize from `nextSeq`; otherwise
-   `recover(..., { action: "mark_unknown" })` CAS-terminalizes the contiguous
-   prefix as incomplete `unknown`. There is no automatic timer that guesses
-   whether an external process ran.
-9. No terminal-to-terminal or terminal-to-writing transition exists.
+   `disposition = "existing"` and a writer whose `nextSeq` equals
+   `committedChunkCount`; physical candidates do not advance `nextSeq`.
+   `nextSeq` does not prove whether an external process already ran. A matching
+   terminal result returns `BeginResult.kind = "terminal"` without rerunning
+   the tool. Identity/schema mismatches and malformed committed-prefix metadata
+   fail closed.
+3. `append(seq, ...)` reads the manifest. For `writing`, it accepts only
+   `seq <= committedChunkCount`: a lower sequence is an idempotent retry only
+   when its committed chunk exactly matches, while a higher sequence is a gap
+   and is rejected. For a terminal manifest, an exact committed-chunk retry is
+   success only when `seq < chunkCount`; all other appends conflict.
+4. For `seq === committedChunkCount`, append enforces chunk and result limits
+   against `committedTotalBytes`, then creates the fixed immutable sequence
+   candidate with `expectedRevision=0`. If creation conflicts, the existing
+   candidate must match sequence, stream, length, and SHA-256; exact match may
+   be adopted, while mismatch is a conflict.
+5. Append CAS-replaces the observed writing manifest, incrementing
+   `committedChunkCount` and `committedTotalBytes`. This manifest CAS is the
+   append linearization point. On CAS conflict or a lost response, append
+   rereads the manifest: success is reported only when the writing or terminal
+   committed prefix now includes the exact candidate; otherwise it fails
+   closed.
+6. `finalize` first reads the manifest. For `writing`, the requested
+   `chunkCount` must equal `committedChunkCount`; finalize reads and verifies
+   exactly that committed prefix, including chunk hashes, total limits,
+   aggregate digest, and line accounting, then CAS-replaces the observed
+   writing-manifest revision. A concurrent append changes that revision and
+   makes finalize lose the CAS.
+7. A lost finalize response is safe: retry reads the terminal manifest and
+   succeeds only if the canonical finalize input and aggregate over the
+   terminal committed prefix match. Uncommitted candidates beyond terminal
+   `chunkCount` are ignored and cannot change this result.
+8. Manifest-committed chunks, uncommitted candidates, and terminal manifests
+   are never changed by the library. Fixed sequence paths bound an abandoned or
+   late candidate to at most one object at the uncommitted frontier. Such an
+   object may remain after a crash or race, but it is not logical evidence.
+9. A crash before terminal CAS leaves `writing`. Calling `begin` with the same
+   identity may resume deterministic append/finalize from
+   `committedChunkCount`; an exact candidate already present at that sequence
+   may be adopted by the append CAS. Otherwise
+   `recover(..., { action: "mark_unknown" })` verifies and CAS-terminalizes only
+   the manifest-committed prefix as incomplete `unknown`. There is no automatic
+   timer that guesses whether an external process ran.
+10. No terminal-to-terminal or terminal-to-writing transition exists.
 
 This protocol makes evidence persistence idempotent. It does not make process
 execution exactly once and it does not prevent a privileged external client
@@ -495,10 +525,11 @@ tool uses line pages and emits text. Stored append payloads must be valid UTF-8
 and chunk splitting must preserve code-point boundaries. Empty output has zero
 lines; non-empty output has newline-count plus one unless it ends in newline.
 
-Corruption, missing chunks, and checksum mismatch fail closed. Read tools never
-fall back to injecting the complete result. They reject `writing` results.
-Reading an `unknown` contiguous prefix requires explicit `allowIncomplete` and
-the model-visible response is labeled incomplete.
+Corruption, missing manifest-committed chunks, and checksum mismatch fail
+closed. Uncommitted candidates are neither corruption nor readable evidence.
+Read tools never fall back to injecting the complete result. They reject
+`writing` results. Reading an `unknown` committed prefix requires explicit
+`allowIncomplete` and the model-visible response is labeled incomplete.
 
 ## 8. Pi Adapters
 
@@ -594,7 +625,9 @@ Rules:
 | Failure point | Required behavior |
 | --- | --- |
 | Manifest create response lost before process spawn | Repeat `begin`; it returns existing, so `drive9_exec` marks that attempt `unknown` and begins a new attempt before spawning |
-| Chunk write response lost | Repeat same seq; verify envelope digest |
+| Candidate create response lost | Repeat same seq; verify the immutable envelope, then CAS-commit it |
+| Append manifest CAS response lost | Reread manifest; exact committed candidate is success |
+| Append races finalize | Only one manifest CAS wins; a losing late candidate remains unreferenced and cannot alter terminal evidence |
 | Process crashes after spawn but before first chunk | Existing writing attempt has `nextSeq=0`; mark it `unknown` and begin a new attempt before rerun |
 | Process crashes after chunks | Manifest remains `writing`; explicit recovery resumes or marks `unknown` |
 | Finalize response lost | Read terminal manifest; exact match is success |
@@ -620,12 +653,23 @@ Rules:
 
 ### 11.2 Result protocol conformance
 
-- Stable identity and attempt partitioning.
+- Stable identity and attempt partitioning, including non-aliasing vectors for
+  field splits such as `("a", "bc")` versus `("ab", "c")`.
 - Concurrent `begin` for the same identity.
 - `begin` distinguishes newly created from pre-existing writing manifests.
 - `drive9_exec` never spawns for a pre-existing writing manifest, including
   `nextSeq=0`; it marks the attempt `unknown` and allocates a new attempt.
 - Idempotent same-byte append and rejection of different-byte reuse.
+- Candidate creation precedes append commit; manifest CAS is the append
+  linearization point, and a candidate left before CAS can be adopted by an
+  exact retry.
+- Two independent store instances sharing one backend deterministically race a
+  delayed append against finalize. Only one writing-manifest CAS wins; terminal
+  bytes, chunk count, digest, manifest revision, and committed-chunk revisions
+  remain unchanged by the late candidate, and a lost finalize-response retry
+  remains idempotent.
+- Finalize and `mark_unknown` aggregate only the manifest-committed prefix;
+  uncommitted candidates are neither readable evidence nor trailing corruption.
 - Chunk and result limit boundaries.
 - Gap, duplicate, corruption, and missing-chunk detection.
 - Crash after begin, after chunk, before finalize, and after terminal CAS with a
