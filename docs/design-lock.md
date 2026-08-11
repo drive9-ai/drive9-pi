@@ -118,7 +118,9 @@ local shell would create two different workspaces.
 `ToolResultStore` uses the Drive9 TypeScript client directly and writes to a
 dedicated evidence prefix using a separately scoped credential. It does not
 write through the active LayerFS overlay. Layer rollback therefore does not
-delete evidence.
+delete evidence: the current rollback operation changes the LayerFS state and
+emits a layer event; it has no mutation path to ordinary base-filesystem objects
+created directly under the evidence prefix.
 
 Recommended deployment shape:
 
@@ -480,7 +482,9 @@ Rules:
   or next durable sequence, never a mixed identity.
 - A required drain failure prevents a false post-write revision claim.
 - Evidence created for a layer remains after layer rollback and still reports
-  the original layer/checkpoint/durable sequence.
+  the original layer/checkpoint/durable sequence. The test records terminal
+  manifest and chunk Drive9 revisions plus SHA-256 values before rollback, then
+  proves the same revisions and bytes remain afterward.
 
 ### 11.4 Required end-to-end demo
 
@@ -497,7 +501,9 @@ real Drive9 result prefix:
 5. Modify code in a LayerFS workspace, drain, checkpoint, run the test, and bind
    the evidence to that durable revision.
 6. Roll back/abandon the layer and prove the workspace view changes while the
-   prior result remains readable with its old workspace binding.
+   prior result remains readable with its old workspace binding. Compare every
+   terminal manifest/chunk revision and SHA-256 before and after rollback; a
+   model-level read alone is not sufficient evidence.
 7. Kill the demo process after at least one chunk, restart, and prove explicit
    recovery produces either the exact final digest or terminal `unknown`—never
    a false `completed` result.
