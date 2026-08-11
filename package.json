@@ -1,0 +1,36 @@
+{
+  "name": "@drive9-ai/drive9-pi",
+  "version": "0.1.0",
+  "description": "Drive9 execution and evidence adapters for Pi",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs/design-lock.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "tsx": "4.22.1",
+    "typescript": "5.9.3"
+  }
+}
