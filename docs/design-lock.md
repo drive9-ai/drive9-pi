@@ -274,19 +274,102 @@ export interface AppendInput {
 
 export interface FinalizeInput {
   state: Exclude<ResultState, "writing">;
+  chunkCount: number;                 // exact expected contiguous count
   exitCode?: number;
   error?: { code: string; message: string };
   workspaceAfter?: WorkspaceRevision;
 }
 
+export interface ResultStat {
+  resultId: string;
+  identity: ToolResultIdentity;
+  toolName: string;
+  mediaType: "text/plain; charset=utf-8";
+  state: ResultState;
+  complete: boolean;                  // false for writing/unknown
+  chunkCount: number;
+  totalBytes: number;
+  totalLines: number;
+  sha256?: string;                    // terminal contiguous payload only
+  exitCode?: number;
+  error?: { code: string; message: string };
+  workspaceBefore?: WorkspaceRevision;
+  workspaceAfter?: WorkspaceRevision;
+  manifestRevision: number;
+}
+
 export interface ResultWriter {
   readonly resultId: string;
+  readonly nextSeq: number;            // first missing contiguous sequence
   append(input: AppendInput): Promise<void>;
   finalize(input: FinalizeInput): Promise<ResultStat>;
 }
 
+export type BeginResult =
+  | { kind: "writing"; writer: ResultWriter; stat: ResultStat }
+  | { kind: "terminal"; stat: ResultStat };
+
+export interface ReadLinesInput {
+  startLine: number;                   // zero-based
+  maxLines: number;                    // 1..1,000
+  maxBytes?: number;                   // defaults to and never exceeds 64 KiB
+  allowIncomplete?: boolean;           // required for unknown, never writing
+}
+
+export interface ReadRangeInput {
+  offset: number;                      // decoded logical byte offset
+  length: number;                      // 1..64 KiB
+  allowIncomplete?: boolean;           // required for unknown, never writing
+}
+
+export interface ReadPage {
+  resultId: string;
+  state: Exclude<ResultState, "writing">;
+  complete: boolean;
+  text: string;
+  startByte: number;
+  endByte: number;
+  startLine: number;
+  endLine: number;
+  nextCursor?: string;
+  workspaceBefore?: WorkspaceRevision;
+  workspaceAfter?: WorkspaceRevision;
+}
+
+export interface SearchInput {
+  query: string;                       // non-empty literal UTF-8 text
+  caseSensitive?: boolean;             // defaults to true
+  cursor?: string;
+  maxMatches?: number;                 // defaults to 20, max 100
+  contextBytes?: number;               // per match, bounded by response cap
+  allowIncomplete?: boolean;           // required for unknown, never writing
+}
+
+export interface SearchMatch {
+  byteOffset: number;
+  line: number;
+  text: string;
+}
+
+export interface SearchPage {
+  resultId: string;
+  state: Exclude<ResultState, "writing">;
+  complete: boolean;
+  matches: SearchMatch[];
+  scannedBytes: number;
+  nextCursor?: string;
+  workspaceBefore?: WorkspaceRevision;
+  workspaceAfter?: WorkspaceRevision;
+}
+
+export interface RecoverInput {
+  identity: ToolResultIdentity;
+  action: "mark_unknown";
+  reason: string;
+}
+
 export interface ToolResultStore {
-  begin(input: BeginResultInput): Promise<ResultWriter>;
+  begin(input: BeginResultInput): Promise<BeginResult>;
   stat(resultId: string): Promise<ResultStat>;
   readLines(resultId: string, input: ReadLinesInput): Promise<ReadPage>;
   readRange(resultId: string, input: ReadRangeInput): Promise<ReadPage>;
@@ -331,21 +414,27 @@ count, whole-result SHA-256, and a sparse byte/line index.
 1. `begin` creates `manifest.json` in `writing` state with
    `expectedRevision=0`.
 2. If creation conflicts, the store reads the manifest. It resumes only when
-   schema and full identity match and the state is `writing`; matching terminal
-   state is returned idempotently; all other cases fail closed.
+   schema and full identity match. A well-formed `writing` result returns a
+   writer whose `nextSeq` is the first missing contiguous sequence; a matching
+   terminal result returns `BeginResult.kind = "terminal"` without rerunning
+   the tool. Trailing chunks after a gap and all identity/schema mismatches fail
+   closed.
 3. `append(seq, ...)` creates the sequence chunk with `expectedRevision=0`.
 4. If chunk creation conflicts, the existing chunk must match sequence, stream,
    length, and SHA-256. Exact match is an idempotent retry; mismatch is a
    conflict.
-5. The writer rejects gaps at finalize. It verifies every sequence from zero,
-   each chunk hash, total limits, the aggregate digest, and line accounting.
+5. The writer rejects gaps at finalize. It verifies exactly `chunkCount`
+   sequences from zero, rejects trailing chunks, and verifies each chunk hash,
+   total limits, the aggregate digest, and line accounting.
 6. `finalize` CAS-replaces the writing manifest using its observed positive
    revision. A lost response is safe: retry reads the terminal manifest and
    succeeds only if the canonical finalize input and aggregate digest match.
 7. Terminal manifests and chunks are never changed by the library.
-8. A crash before terminal CAS leaves `writing`. Recovery may resume
-   deterministic appends/finalize or CAS it to `unknown`. There is no automatic
-   timer that guesses whether an external process ran.
+8. A crash before terminal CAS leaves `writing`. Calling `begin` with the same
+   identity may resume deterministic append/finalize from `nextSeq`; otherwise
+   `recover(..., { action: "mark_unknown" })` CAS-terminalizes the contiguous
+   prefix as incomplete `unknown`. There is no automatic timer that guesses
+   whether an external process ran.
 9. No terminal-to-terminal or terminal-to-writing transition exists.
 
 This protocol makes evidence persistence idempotent. It does not make process
@@ -375,7 +464,9 @@ context around each match, and returns a scan cursor when the 64 MiB scan limit
 is reached. P0 does not accept untrusted regular expressions.
 
 Corruption, missing chunks, and checksum mismatch fail closed. Read tools never
-fall back to injecting the complete result.
+fall back to injecting the complete result. They reject `writing` results.
+Reading an `unknown` contiguous prefix requires explicit `allowIncomplete` and
+the model-visible response is labeled incomplete.
 
 ## 8. Pi Adapters
 
@@ -389,9 +480,9 @@ Execution order:
 1. Resolve invocation identity and optional `workspaceBefore`.
 2. `begin` the result.
 3. Spawn in the root-confined workspace cwd.
-4. Split stdout/stderr callbacks into at most 64 KiB chunks, assign monotonic
-   sequence numbers in callback-receipt order, and await durable chunk writes
-   with bounded backpressure.
+4. At callback receipt, synchronously reserve monotonic sequence numbers before
+   scheduling any asynchronous store work; then split stdout/stderr into at
+   most 64 KiB chunks and await durable writes with bounded backpressure.
 5. On process completion, capture optional `workspaceAfter` after the configured
    drain/checkpoint barrier.
 6. Finalize as `completed`, `failed`, `aborted`, or `unknown`.
