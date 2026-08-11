@@ -1,6 +1,6 @@
 # Pi × Drive9 P0 Design Lock
 
-Status: **Proposed**  
+Status: **Proposed**
 Implementation must not start until this document is approved.
 
 ## 1. Purpose
@@ -269,7 +269,7 @@ export interface BeginResultInput {
 export interface AppendInput {
   seq: number;                        // explicit, starts at zero
   stream: "stdout" | "stderr" | "tool";
-  data: Uint8Array;                   // at most 64 KiB per stored chunk
+  data: Uint8Array;                   // valid UTF-8, max 64 KiB, no split code point
 }
 
 export interface FinalizeInput {
@@ -306,7 +306,12 @@ export interface ResultWriter {
 }
 
 export type BeginResult =
-  | { kind: "writing"; writer: ResultWriter; stat: ResultStat }
+  | {
+      kind: "writing";
+      disposition: "created" | "existing";
+      writer: ResultWriter;
+      stat: ResultStat;
+    }
   | { kind: "terminal"; stat: ResultStat };
 
 export interface ReadLinesInput {
@@ -332,6 +337,18 @@ export interface ReadPage {
   startLine: number;
   endLine: number;
   nextCursor?: string;
+  workspaceBefore?: WorkspaceRevision;
+  workspaceAfter?: WorkspaceRevision;
+}
+
+export interface BytePage {
+  resultId: string;
+  state: Exclude<ResultState, "writing">;
+  complete: boolean;
+  bytes: Uint8Array;
+  startByte: number;
+  endByte: number;
+  nextOffset?: number;
   workspaceBefore?: WorkspaceRevision;
   workspaceAfter?: WorkspaceRevision;
 }
@@ -372,7 +389,7 @@ export interface ToolResultStore {
   begin(input: BeginResultInput): Promise<BeginResult>;
   stat(resultId: string): Promise<ResultStat>;
   readLines(resultId: string, input: ReadLinesInput): Promise<ReadPage>;
-  readRange(resultId: string, input: ReadRangeInput): Promise<ReadPage>;
+  readRange(resultId: string, input: ReadRangeInput): Promise<BytePage>;
   search(resultId: string, input: SearchInput): Promise<SearchPage>;
   recover(resultId: string, input: RecoverInput): Promise<ResultStat>;
 }
@@ -387,7 +404,10 @@ are `invalid`, `not_found`, `permission_denied`, `conflict`, `limit_exceeded`,
 `resultId` is derived from a versioned canonical encoding of
 `sessionId/runId/toolCallId/attempt` and SHA-256. Raw identifiers are not used
 as path segments. `attempt` is part of the identity because retrying an
-external tool is not exactly once.
+external tool is not exactly once. All identifiers are non-empty UTF-8 strings;
+`attempt` must be a non-negative JavaScript safe integer. Length-prefixed UTF-8
+fields and an unsigned big-endian attempt form the canonical preimage; test
+vectors lock the exact encoding.
 
 The same identity always produces the same `resultId`. A different identity
 must never alias it.
@@ -412,13 +432,16 @@ count, whole-result SHA-256, and a sparse byte/line index.
 ### 7.4 Write protocol
 
 1. `begin` creates `manifest.json` in `writing` state with
-   `expectedRevision=0`.
+   `expectedRevision=0`. A successful create returns a writing result with
+   `disposition = "created"`.
 2. If creation conflicts, the store reads the manifest. It resumes only when
-   schema and full identity match. A well-formed `writing` result returns a
-   writer whose `nextSeq` is the first missing contiguous sequence; a matching
-   terminal result returns `BeginResult.kind = "terminal"` without rerunning
-   the tool. Trailing chunks after a gap and all identity/schema mismatches fail
-   closed.
+   schema, full identity, tool name, media type, and immutable workspace-before
+   binding match. A well-formed `writing` result returns
+   `disposition = "existing"` and a writer whose `nextSeq` is the first missing
+   contiguous sequence; `nextSeq` does not prove whether an external process
+   already ran. A matching terminal result returns
+   `BeginResult.kind = "terminal"` without rerunning the tool. Trailing chunks
+   after a gap and all identity/schema mismatches fail closed.
 3. `append(seq, ...)` creates the sequence chunk with `expectedRevision=0`.
 4. If chunk creation conflicts, the existing chunk must match sequence, stream,
    length, and SHA-256. Exact match is an idempotent retry; mismatch is a
@@ -463,6 +486,12 @@ UTF-8 substring search in P0, supports optional case folding, returns bounded
 context around each match, and returns a scan cursor when the 64 MiB scan limit
 is reached. P0 does not accept untrusted regular expressions.
 
+`readRange` is the storage-level byte API and returns raw bytes, so arbitrary
+offsets cannot corrupt UTF-8 by forced decoding. The model-facing `result_read`
+tool uses line pages and emits text. Stored append payloads must be valid UTF-8
+and chunk splitting must preserve code-point boundaries. Empty output has zero
+lines; non-empty output has newline-count plus one unless it ends in newline.
+
 Corruption, missing chunks, and checksum mismatch fail closed. Read tools never
 fall back to injecting the complete result. They reject `writing` results.
 Reading an `unknown` contiguous prefix requires explicit `allowIncomplete` and
@@ -479,6 +508,16 @@ Execution order:
 
 1. Resolve invocation identity and optional `workspaceBefore`.
 2. `begin` the result.
+   - If it returns a matching terminal result, skip process execution and
+     return that result's compact reference.
+   - A writing result with `disposition = "created"` belongs to this invocation
+     and may proceed to spawn.
+   - A writing result with `disposition = "existing"` may represent a process
+     that ran but crashed before its first durable chunk, even when
+     `nextSeq = 0`. `drive9_exec` therefore marks the old attempt `unknown`,
+     requires the host to allocate and `begin` a new attempt, and does not spawn
+     under the old identity. Generic deterministic producers may still use the
+     store-level resume contract.
 3. Spawn in the root-confined workspace cwd.
 4. At callback receipt, synchronously reserve monotonic sequence numbers before
    scheduling any asynchronous store work; then split stdout/stderr into at
@@ -551,8 +590,9 @@ Rules:
 
 | Failure point | Required behavior |
 | --- | --- |
-| Manifest create response lost | Repeat `begin`; verify identity |
+| Manifest create response lost before process spawn | Repeat `begin`; it returns existing, so `drive9_exec` marks that attempt `unknown` and begins a new attempt before spawning |
 | Chunk write response lost | Repeat same seq; verify envelope digest |
+| Process crashes after spawn but before first chunk | Existing writing attempt has `nextSeq=0`; mark it `unknown` and begin a new attempt before rerun |
 | Process crashes after chunks | Manifest remains `writing`; explicit recovery resumes or marks `unknown` |
 | Finalize response lost | Read terminal manifest; exact match is success |
 | Different bytes reuse a seq | Fail `conflict`; never overwrite |
@@ -579,6 +619,9 @@ Rules:
 
 - Stable identity and attempt partitioning.
 - Concurrent `begin` for the same identity.
+- `begin` distinguishes newly created from pre-existing writing manifests.
+- `drive9_exec` never spawns for a pre-existing writing manifest, including
+  `nextSeq=0`; it marks the attempt `unknown` and allocates a new attempt.
 - Idempotent same-byte append and rejection of different-byte reuse.
 - Chunk and result limit boundaries.
 - Gap, duplicate, corruption, and missing-chunk detection.
