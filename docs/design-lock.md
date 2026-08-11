@@ -227,6 +227,9 @@ spawn, and callback failures map to the corresponding Pi execution codes.
 - The selected `cwd` is resolved and symlink-checked before spawn.
 - `TMPDIR`, `TMP`, and `TEMP` default to the environment's private Drive9 temp
   directory unless explicitly overridden.
+- Filesystem confinement checks are check-then-use, not atomic path isolation.
+  A concurrent adversarial path swap can race the canonical-path check; P0 does
+  not claim `openat`/file-descriptor-based protection against that TOCTOU window.
 - Full `Shell.exec` stdout/stderr remain required by the Pi contract and are
   therefore not advertised as memory-bounded. High-output work must use
   `drive9_exec`.
