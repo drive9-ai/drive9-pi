@@ -78,9 +78,11 @@ const env = composeExecutionEnv({
 });
 ```
 
-The compositor delegates only. It does not create a local process or fall back
-to the host shell. Without a supplied shell, use `Drive9FileSystem` directly
-and do not register exec/bash tools.
+The compositor delegates only. It resolves the command working directory
+against the current filesystem `cwd`, passes that absolute path to the supplied
+shell, and preserves every other execution option. It does not create a local
+process or fall back to the host shell. Without a supplied shell, use
+`Drive9FileSystem` directly and do not register exec/bash tools.
 
 A bare shell process does not call the Drive9 SDK, so its filesystem side
 effects are not automatically recorded. Customers that require transparent

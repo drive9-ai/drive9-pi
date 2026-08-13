@@ -39,7 +39,11 @@ methods do not reject.
 
 `composeExecutionEnv({ fileSystem, shell })` is delegation only. It forwards
 all file operations to the supplied `FileSystem` and `exec` to the supplied
-`Shell`. It owns no execution implementation and introduces no fallback.
+`Shell`. Before delegation it resolves `options.cwd ?? fileSystem.cwd` through
+`FileSystem.absolutePath` and passes the resulting absolute path to the caller
+shell, preserving Pi's `ExecutionEnv.cwd` semantics. Resolution failure returns
+an `ExecutionError` without calling the shell. The compositor owns no execution
+implementation and introduces no fallback.
 
 Without a caller-provided `Shell`, applications use `Drive9FileSystem`
 directly and must not register shell tools.
@@ -104,9 +108,9 @@ performing any mutation.
 | read text/binary | implemented | effective layer entry first; whiteout is absent; otherwise base `read` | mapped `FileError` | layer shadows base, whiteout hides base, base fallback |
 | write | implemented | `uploadFSLayerFile`; never generic base `write` | mapped `FileError` | new file, base copy-up, aborted-before-call, base remains unchanged |
 | mkdir | implemented | `upsertFSLayerEntry(op="mkdir")`; recursive creation is ordered parent-first | mapped `FileError` | existing base parent, nested creation, file collision |
-| remove file/empty dir | implemented | one `whiteout` entry after merged emptiness/type checks | mapped `FileError` | base delete, layer delete, non-empty directory unchanged |
+| remove file/empty dir | implemented | one `whiteout` entry after merged emptiness/type checks from the same captured layer view | mapped `FileError` | base delete, layer delete, non-empty directory unchanged, one-view emptiness check |
 | merged stat | client-composed | capture one durable layer seq; effective entry from `diffFSLayer(maxSeq)`; otherwise base `stat`; retry on layer-seq movement | mapped `FileError` | layer shadow, whiteout, delete then recreate, concurrent layer mutation retry |
-| merged list | client-composed | capture one durable layer seq; base `list(dir)` plus direct children from `diffFSLayer(maxSeq)`; whiteout removes, layer entry replaces; retry on layer-seq movement; deterministic name sort | mapped `FileError` | whiteout hides base, layer shadows base, delete/recreate, merged deterministic order, concurrent layer mutation retry |
+| merged list | client-composed | capture one durable layer seq; complete non-paginated base `list(dir)` array plus direct children from `diffFSLayer(maxSeq)`; whiteout removes, layer entry replaces; retry on layer-seq movement; deterministic name sort | mapped `FileError` | whiteout hides base, layer shadows base, delete/recreate, full base list retained, merged deterministic order, concurrent layer mutation retry |
 | create temp file/dir | implemented | unique path under configured temp root using layer write/mkdir | mapped `FileError` | collision retry and cleanup owns only created paths |
 | canonical path | partial | normalized addressed path for non-symlinks | symlink returns `not_supported` | regular path and explicit symlink rejection |
 | append | unsupported | no LayerFS append/CAS primitive; no unbounded read-modify-write fallback | `not_supported`, no writes | call count proves no backend mutation |
@@ -119,6 +123,12 @@ O(total layer entries) per refresh. The adapter has a configured
 merging when either limit is exceeded. A
 server-side prefix-filtered, paginated, atomically merged view is a performance
 and consistency follow-up, not a hidden property of this adapter.
+
+The pinned `drive9@0.1.4` base `Client.list(path)` contract returns one complete
+array and exposes no cursor or continuation token; the corresponding server
+`ListDir` query has no limit. The adapter preserves every returned child. A
+future paginated SDK contract requires an adapter update before the dependency
+can be upgraded.
 
 Pi core session JSONL storage uses append and atomic rename. Until LayerFS
 provides those semantics, `Drive9FileSystem` is a workspace adapter and must not

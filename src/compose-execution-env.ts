@@ -1,8 +1,10 @@
-import type {
-  ExecutionEnv,
-  FileSystem,
-  Shell,
-  ShellExecOptions,
+import {
+  err,
+  ExecutionError,
+  type ExecutionEnv,
+  type FileSystem,
+  type Shell,
+  type ShellExecOptions,
 } from "@earendil-works/pi-agent-core";
 
 export interface ComposeExecutionEnvOptions {
@@ -44,8 +46,18 @@ class ComposedExecutionEnv implements ExecutionEnv {
   createTempDir: FileSystem["createTempDir"] = async (...args) => await this.fileSystem.createTempDir(...args);
   createTempFile: FileSystem["createTempFile"] = async (...args) => await this.fileSystem.createTempFile(...args);
 
-  exec(command: string, options?: ShellExecOptions): ReturnType<Shell["exec"]> {
-    return this.shell.exec(command, options);
+  async exec(command: string, options?: ShellExecOptions): ReturnType<Shell["exec"]> {
+    const cwd = await this.fileSystem.absolutePath(options?.cwd ?? this.cwd, options?.abortSignal);
+    if (!cwd.ok) {
+      return err(
+        new ExecutionError(
+          cwd.error.code === "aborted" ? "aborted" : "spawn_error",
+          `Cannot resolve execution working directory: ${cwd.error.message}`,
+          cwd.error,
+        ),
+      );
+    }
+    return await this.shell.exec(command, { ...(options ?? {}), cwd: cwd.value });
   }
 
   async cleanup(): Promise<void> {

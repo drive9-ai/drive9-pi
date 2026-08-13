@@ -276,6 +276,20 @@ describe("Drive9FileSystem", () => {
     assertErrorCode(await fileSystem.fileInfo("recreated/old-child.txt"), "not_found");
   });
 
+  it("preserves every child returned by the non-paginated base list contract", async () => {
+    const client = new FakeLayerClient();
+    for (let index = 0; index < 1_025; index += 1) {
+      client.addBaseFile(`/workspace/file-${index.toString().padStart(4, "0")}.txt`, String(index));
+    }
+    const fileSystem = createFileSystem(client);
+
+    const entries = getOrThrow(await fileSystem.listDir("."));
+    assert.equal(entries.length, 1_025);
+    assert.equal(entries[0]?.name, "file-0000.txt");
+    assert.equal(entries.at(-1)?.name, "file-1024.txt");
+    assert.equal(client.listCalls, 1);
+  });
+
   it("whiteouts a single object without deleting base storage", async () => {
     const client = new FakeLayerClient();
     client.addBaseFile("/workspace/remove.txt", "keep-in-base", 4);
@@ -285,6 +299,16 @@ describe("Drive9FileSystem", () => {
     assert.equal(client.base.has("/workspace/remove.txt"), true);
     assert.deepEqual(client.entryCalls, [{ path: "/workspace/remove.txt", op: "whiteout", baseRevision: 4 }]);
     assert.equal(getOrThrow(await fileSystem.exists("remove.txt")), false);
+  });
+
+  it("uses one stable layer view for directory emptiness and whiteout", async () => {
+    const client = new FakeLayerClient();
+    client.addBaseDirectory("/workspace/empty", 7);
+    const fileSystem = createFileSystem(client);
+
+    getOrThrow(await fileSystem.remove("empty"));
+    assert.equal(client.diffCalls, 1);
+    assert.deepEqual(client.entryCalls, [{ path: "/workspace/empty", op: "whiteout", baseRevision: 7 }]);
   });
 
   it("fails unsupported append, rename, and recursive remove before mutation", async () => {

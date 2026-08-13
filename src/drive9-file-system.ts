@@ -367,31 +367,7 @@ export class Drive9FileSystem implements FileSystem {
       const directory = await this.infoAt(addressed, view, true);
       if (directory === undefined) throw new FileError("not_found", "directory does not exist", addressed);
       if (directory.kind !== "directory") throw new FileError("not_directory", "path is not a directory", addressed);
-
-      const children = new Map<string, FileInfo>();
-      const directoryEntry = view.entries.get(addressed);
-      if (directoryEntry === undefined) {
-        try {
-          for (const info of await this.client.list(addressed)) {
-            if (info.name.includes("/") || info.name.includes("\\") || info.name === "." || info.name === "..") {
-              throw new FileError("unknown", "Drive9 returned an invalid directory child", addressed);
-            }
-            const childPath = posix.join(addressed, info.name);
-            children.set(info.name, baseInfo(childPath, info));
-          }
-        } catch (error) {
-          if (!isMissing(error)) throw error;
-        }
-      }
-
-      for (const entry of view.entries.values()) {
-        if (posix.dirname(entry.path) !== addressed) continue;
-        if (directoryEntry !== undefined && entry.entry_seq <= directoryEntry.entry_seq) continue;
-        const name = posix.basename(entry.path);
-        if (entry.op === "whiteout") children.delete(name);
-        else children.set(name, this.materializedLayerInfo(entry));
-      }
-      return [...children.values()].sort((left, right) => left.name.localeCompare(right.name));
+      return await this.listChildrenAt(addressed, view);
     });
   }
 
@@ -467,9 +443,8 @@ export class Drive9FileSystem implements FileSystem {
         throw new FileError("not_found", "path does not exist", target);
       }
       if (info.kind === "directory") {
-        const listed = await this.listDir(target, options?.abortSignal);
-        if (!listed.ok) throw listed.error;
-        if (listed.value.length > 0) throw new FileError("invalid", "directory is not empty", target);
+        const children = await this.listChildrenAt(target, view);
+        if (children.length > 0) throw new FileError("invalid", "directory is not empty", target);
       }
       const baseRevision = await this.baseRevisionAt(target, view);
       await this.client.upsertFSLayerEntry(this.layerId, {
@@ -642,6 +617,33 @@ export class Drive9FileSystem implements FileSystem {
       if (isMissing(error)) return undefined;
       throw error;
     }
+  }
+
+  private async listChildrenAt(path: string, view: LayerView): Promise<FileInfo[]> {
+    const children = new Map<string, FileInfo>();
+    const directoryEntry = view.entries.get(path);
+    if (directoryEntry === undefined) {
+      try {
+        for (const info of await this.client.list(path)) {
+          if (info.name.includes("/") || info.name.includes("\\") || info.name === "." || info.name === "..") {
+            throw new FileError("unknown", "Drive9 returned an invalid directory child", path);
+          }
+          const childPath = posix.join(path, info.name);
+          children.set(info.name, baseInfo(childPath, info));
+        }
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+    }
+
+    for (const entry of view.entries.values()) {
+      if (posix.dirname(entry.path) !== path) continue;
+      if (directoryEntry !== undefined && entry.entry_seq <= directoryEntry.entry_seq) continue;
+      const name = posix.basename(entry.path);
+      if (entry.op === "whiteout") children.delete(name);
+      else children.set(name, this.materializedLayerInfo(entry));
+    }
+    return [...children.values()].sort((left, right) => left.name.localeCompare(right.name));
   }
 
   private async rejectSymlinkTraversal(path: string, view: LayerView, includeLeaf: boolean): Promise<void> {

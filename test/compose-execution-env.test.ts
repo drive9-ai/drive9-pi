@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { posix } from "node:path";
 import { describe, it } from "node:test";
 import {
+  err,
   ExecutionError,
+  FileError,
   type FileInfo,
   type FileSystem,
   ok,
@@ -12,9 +15,9 @@ import { composeExecutionEnv } from "../src/compose-execution-env.js";
 
 function fakeFileSystem(events: string[]): FileSystem {
   const info: FileInfo = { name: "workspace", path: "/workspace", kind: "directory", size: 0, mtimeMs: 0 };
-  return {
+  const fileSystem: FileSystem = {
     cwd: "/workspace",
-    absolutePath: async (path) => ok(path.startsWith("/") ? path : `/workspace/${path}`),
+    absolutePath: async (path) => ok(posix.isAbsolute(path) ? posix.normalize(path) : posix.resolve(fileSystem.cwd, path)),
     joinPath: async (parts) => ok(`/workspace/${parts.join("/")}`),
     readTextFile: async () => ok("text"),
     readTextLines: async () => ok(["text"]),
@@ -34,6 +37,7 @@ function fakeFileSystem(events: string[]): FileSystem {
       events.push("filesystem-cleanup");
     },
   };
+  return fileSystem;
 }
 
 class RecordingShell implements Shell {
@@ -63,7 +67,15 @@ describe("composeExecutionEnv", () => {
     assert.equal((await environment.readTextFile("file.txt")).ok, true);
     const execution = await environment.exec("customer-command", { timeout: 12 });
     assert.deepEqual(execution, ok({ stdout: "caller-shell", stderr: "", exitCode: 0 }));
-    assert.deepEqual(shell.calls, [{ command: "customer-command", options: { timeout: 12 } }]);
+    assert.deepEqual(shell.calls, [
+      { command: "customer-command", options: { timeout: 12, cwd: "/workspace/subdir" } },
+    ]);
+
+    await environment.exec("relative-command", { cwd: "../other" });
+    assert.deepEqual(shell.calls[1], {
+      command: "relative-command",
+      options: { cwd: "/workspace/other" },
+    });
 
     await environment.cleanup();
     assert.deepEqual(events.sort(), ["filesystem-cleanup", "shell-cleanup"]);
@@ -85,5 +97,16 @@ describe("composeExecutionEnv", () => {
     const result = await composeExecutionEnv({ fileSystem: fakeFileSystem([]), shell }).exec("command");
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.error.code, "shell_unavailable");
+  });
+
+  it("does not call the shell when the filesystem rejects the execution cwd", async () => {
+    const fileSystem = fakeFileSystem([]);
+    fileSystem.absolutePath = async () => err(new FileError("permission_denied", "outside workspace"));
+    const shell = new RecordingShell([]);
+
+    const result = await composeExecutionEnv({ fileSystem, shell }).exec("command", { cwd: "../outside" });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, "spawn_error");
+    assert.equal(shell.calls.length, 0);
   });
 });
