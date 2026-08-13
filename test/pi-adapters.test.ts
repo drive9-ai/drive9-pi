@@ -106,30 +106,16 @@ describe("Pi durable result adapters", () => {
     assert.equal((repeated?.details as { resultId: string }).resultId, details.resultId);
   });
 
-  it("records tool failure and an SDK checkpoint binding without launching commands", async () => {
+  it("records tool failure without launching commands or requiring workspace checkpoints", async () => {
     const store = new PersistentToolResultStore({ backend: new MemoryBackend() });
-    let captures = 0;
     const fallback = createAfterToolCallFallback({
       store,
       allocateIdentity: allocatorFor(identity(0)),
       thresholdBytes: 1,
-      workspaceRevisionProvider: {
-        capture: async () => {
-          captures += 1;
-          return {
-            layerId: "layer-1",
-            durableSeq: 8,
-            snapshotId: "checkpoint-8",
-            capturedAt: "2026-08-13T00:00:00.000Z",
-          };
-        },
-      },
     });
     const result = await fallback(fallbackContext("failed tool output", true));
-    const details = result?.details as { state: string; workspaceAfter?: { durableSeq: number } };
-    assert.equal(captures, 1);
+    const details = result?.details as { state: string };
     assert.equal(details.state, "failed");
-    assert.equal(details.workspaceAfter?.durableSeq, 8);
   });
 
   it("keeps result_read and result_search bounded and rejects cross-session access", async () => {

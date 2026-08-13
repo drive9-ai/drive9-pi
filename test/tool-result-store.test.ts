@@ -79,26 +79,11 @@ const identity: ToolResultIdentity = {
   attempt: 0,
 };
 
-const workspaceBefore = {
-  layerId: "layer-1",
-  durableSeq: 41,
-  snapshotId: "checkpoint-before",
-  capturedAt: "2026-08-11T10:00:00.000Z",
-};
-
-const workspaceAfter = {
-  layerId: "layer-1",
-  durableSeq: 42,
-  snapshotId: "checkpoint-after",
-  capturedAt: "2026-08-11T10:01:00.000Z",
-};
-
 function beginInput(overrides?: Partial<BeginResultInput>): BeginResultInput {
   return {
     identity,
     toolName: "fixture_tool",
     mediaType: "text/plain; charset=utf-8",
-    workspaceBefore,
     ...overrides,
   };
 }
@@ -181,7 +166,7 @@ describe("PersistentToolResultStore write protocol", () => {
     await writer.append({ seq: 2, stream: "tool", data: chunks[2]! });
     assert.equal(writer.nextSeq, 3);
 
-    const finalize = { state: "failed" as const, chunkCount: 3, exitCode: 2, workspaceAfter };
+    const finalize = { state: "failed" as const, chunkCount: 3, exitCode: 2 };
     const stat = await writer.finalize(finalize);
     const body = Buffer.concat(chunks);
     assert.equal(stat.state, "failed");
@@ -190,8 +175,6 @@ describe("PersistentToolResultStore write protocol", () => {
     assert.equal(stat.totalBytes, body.length);
     assert.equal(stat.totalLines, 3);
     assert.equal(stat.sha256, createHash("sha256").update(body).digest("hex"));
-    assert.deepEqual(stat.workspaceBefore, workspaceBefore);
-    assert.deepEqual(stat.workspaceAfter, workspaceAfter);
     assert.equal(stat.manifestRevision, 5);
     assert.deepEqual(await writer.finalize(finalize), stat);
     await rejectCode(writer.finalize({ ...finalize, exitCode: 3 }), "conflict");
@@ -356,7 +339,6 @@ describe("PersistentToolResultStore write protocol", () => {
     const backend = new MemoryResultStoreBackend();
     const { store } = createStore(backend);
     await rejectCode(store.begin(null as unknown as BeginResultInput), "invalid");
-    await rejectCode(store.begin(beginInput({ workspaceBefore: null as unknown as typeof workspaceBefore })), "invalid");
     const writer = await createdWriter(store);
     await rejectCode(writer.append(null as unknown as Parameters<ResultWriter["append"]>[0]), "invalid");
     await rejectCode(writer.finalize(null as unknown as Parameters<ResultWriter["finalize"]>[0]), "invalid");

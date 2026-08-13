@@ -11,9 +11,7 @@ import {
   type ResultStat,
   type ToolResultIdentity,
   type ToolResultStore,
-  type WorkspaceRevision,
 } from "./tool-result-types.js";
-import type { WorkspaceRevisionProvider } from "./workspace-revision.js";
 
 const MEDIA_TYPE = "text/plain; charset=utf-8" as const;
 const MAX_CHUNK_BYTES = 64 * 1024;
@@ -45,14 +43,11 @@ export interface CompactToolResultDetails {
   sha256?: string;
   exitCode?: number;
   error?: { code: string; message: string };
-  workspaceBefore?: WorkspaceRevision;
-  workspaceAfter?: WorkspaceRevision;
 }
 
 export interface AfterToolCallFallbackOptions {
   store: ToolResultStore;
   allocateIdentity: ToolResultIdentityAllocator;
-  workspaceRevisionProvider?: WorkspaceRevisionProvider;
   thresholdBytes?: number;
   previewBytes?: number;
 }
@@ -175,8 +170,6 @@ function statDetails(stat: ResultStat): CompactToolResultDetails {
     ...(stat.sha256 === undefined ? {} : { sha256: stat.sha256 }),
     ...(stat.exitCode === undefined ? {} : { exitCode: stat.exitCode }),
     ...(stat.error === undefined ? {} : { error: { ...stat.error } }),
-    ...(stat.workspaceBefore === undefined ? {} : { workspaceBefore: { ...stat.workspaceBefore } }),
-    ...(stat.workspaceAfter === undefined ? {} : { workspaceAfter: { ...stat.workspaceAfter } }),
   };
 }
 
@@ -191,14 +184,6 @@ function compactHeader(details: CompactToolResultDetails): string {
   ];
   if (details.exitCode !== undefined) fields.push(`exitCode=${details.exitCode}`);
   if (details.sha256 !== undefined) fields.push(`sha256=${details.sha256}`);
-  if (details.workspaceBefore !== undefined) {
-    fields.push(
-      `workspaceBefore=${boundedMessage(details.workspaceBefore.layerId, 512)}@${details.workspaceBefore.durableSeq}`,
-    );
-  }
-  if (details.workspaceAfter !== undefined) {
-    fields.push(`workspaceAfter=${boundedMessage(details.workspaceAfter.layerId, 512)}@${details.workspaceAfter.durableSeq}`);
-  }
   if (details.error !== undefined) {
     fields.push(`error=${boundedMessage(details.error.code, 256)}:${boundedMessage(details.error.message, 1024)}`);
   }
@@ -270,20 +255,9 @@ export function createAfterToolCallFallback(
       if (data === undefined) throw new ResultStoreError("corrupt", "fallback chunk is missing");
       await begun.writer.append({ seq, stream: "tool", data });
     }
-    let workspaceAfter: WorkspaceRevision | undefined;
-    let captureError: { code: string; message: string } | undefined;
-    if (options.workspaceRevisionProvider !== undefined) {
-      try {
-        workspaceAfter = await options.workspaceRevisionProvider.capture();
-      } catch (error) {
-        captureError = { code: "workspace_capture_failed", message: boundedMessage(errorValue(error).message) };
-      }
-    }
     const terminal = await begun.writer.finalize({
       state: context.isError ? "failed" : "completed",
       chunkCount: chunks.length,
-      ...(captureError === undefined ? {} : { error: captureError }),
-      ...(workspaceAfter === undefined ? {} : { workspaceAfter }),
     });
     const compact = await compactResult(options.store, terminal, previewBytes);
     return { content: compact.content, details: compact.details };
@@ -333,8 +307,6 @@ function readPageText(page: Awaited<ReturnType<ToolResultStore["readLines"]>>, c
     startLine: page.startLine,
     endLine: page.endLine,
     ...(cursor === undefined ? {} : { nextCursor: cursor }),
-    ...(page.workspaceBefore === undefined ? {} : { workspaceBefore: page.workspaceBefore }),
-    ...(page.workspaceAfter === undefined ? {} : { workspaceAfter: page.workspaceAfter }),
   });
   return `${metadata}\n--- text ---\n${page.text}`;
 }
@@ -376,8 +348,6 @@ function searchPageText(page: Awaited<ReturnType<ToolResultStore["search"]>>): s
     complete: page.complete,
     scannedBytes: page.scannedBytes,
     ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
-    ...(page.workspaceBefore === undefined ? {} : { workspaceBefore: page.workspaceBefore }),
-    ...(page.workspaceAfter === undefined ? {} : { workspaceAfter: page.workspaceAfter }),
   });
   const matches = page.matches
     .map((match) => `match byte=${match.byteOffset} line=${match.line}\n${match.text}`)

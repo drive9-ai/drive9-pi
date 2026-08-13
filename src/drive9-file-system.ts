@@ -9,9 +9,8 @@ import {
   ok,
   type Result,
 } from "@earendil-works/pi-agent-core";
-import type { FSLayer, FSLayerEntry } from "drive9";
 
-export interface Drive9BaseFileInfo {
+export interface Drive9FileEntry {
   name: string;
   size: number;
   isDir: boolean;
@@ -19,7 +18,7 @@ export interface Drive9BaseFileInfo {
   mode?: number;
 }
 
-export interface Drive9BaseStat {
+export interface Drive9Stat {
   size: number;
   isDir: boolean;
   revision: number;
@@ -27,45 +26,24 @@ export interface Drive9BaseStat {
   mode?: number;
 }
 
-export interface Drive9LayerFileSystemClient {
-  getFSLayer(layerId: string): Promise<FSLayer>;
-  diffFSLayer(layerId: string, maxSeq?: number): Promise<FSLayerEntry[]>;
-  readFSLayerFile(layerId: string, path: string, maxSeq?: number): Promise<Uint8Array>;
-  uploadFSLayerFile(
-    layerId: string,
-    path: string,
-    data: Uint8Array,
-    options?: { baseRevision?: number; mode?: number },
-  ): Promise<FSLayerEntry>;
-  upsertFSLayerEntry(
-    layerId: string,
-    request: {
-      path: string;
-      op: "mkdir" | "whiteout";
-      kind: "file" | "dir" | "symlink";
-      mode?: number;
-      baseRevision?: number;
-    },
-  ): Promise<FSLayerEntry>;
+export interface Drive9FileSystemClient {
   read(path: string): Promise<Uint8Array>;
-  list(path: string): Promise<Drive9BaseFileInfo[]>;
-  stat(path: string): Promise<Drive9BaseStat>;
+  write(path: string, data: Uint8Array): Promise<void>;
+  append(path: string, data: Uint8Array): Promise<void>;
+  list(path: string): Promise<Drive9FileEntry[]>;
+  stat(path: string): Promise<Drive9Stat>;
+  rename(sourcePath: string, destinationPath: string): Promise<void>;
+  mkdir(path: string, mode?: number): Promise<void>;
+  deleteFile(path: string): Promise<void>;
+  deleteDir(path: string): Promise<void>;
+  removeAll(path: string): Promise<void>;
 }
 
 export interface Drive9FileSystemOptions {
-  client: Drive9LayerFileSystemClient;
-  layerId: string;
+  client: Drive9FileSystemClient;
   root: string;
   cwd?: string;
   tempRoot?: string;
-  maxLayerEntries?: number;
-  maxViewRetries?: number;
-  viewTimeoutMs?: number;
-}
-
-interface LayerView {
-  maxSeq: number;
-  entries: Map<string, FSLayerEntry>;
 }
 
 const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -93,14 +71,22 @@ function errorValue(value: unknown): Error {
   return new Error(typeof value === "string" ? value : String(value));
 }
 
+function errorMessage(value: unknown): string {
+  return errorValue(value).message.toLowerCase();
+}
+
 function isMissing(value: unknown): boolean {
-  return statusCode(value) === 404;
+  return statusCode(value) === 404 || errorMessage(value).includes("not found");
 }
 
 function toFileError(value: unknown, path?: string): FileError {
   if (value instanceof FileError) return value;
   const cause = errorValue(value);
+  const message = cause.message.toLowerCase();
   if (cause.name === "AbortError") return new FileError("aborted", cause.message, path, cause);
+  if (isMissing(value)) return new FileError("not_found", cause.message, path, cause);
+  if (message.includes("not a directory")) return new FileError("not_directory", cause.message, path, cause);
+  if (message.includes("is a directory")) return new FileError("is_directory", cause.message, path, cause);
   switch (statusCode(value)) {
     case 400:
     case 409:
@@ -111,8 +97,6 @@ function toFileError(value: unknown, path?: string): FileError {
     case 401:
     case 403:
       return new FileError("permission_denied", cause.message, path, cause);
-    case 404:
-      return new FileError("not_found", cause.message, path, cause);
     case 405:
     case 501:
       return new FileError("not_supported", cause.message, path, cause);
@@ -154,45 +138,24 @@ function validateComponent(value: unknown, label: string): string {
   return value;
 }
 
-function entryKind(entry: FSLayerEntry): FileKind {
-  if (entry.kind === "dir") return "directory";
-  if (entry.kind === "symlink") return "symlink";
-  return "file";
-}
-
-function modeKind(mode: number | undefined, isDir: boolean): FileKind {
+function fileKind(mode: number | undefined, isDir: boolean): FileKind {
   if (mode !== undefined && (mode & FILE_TYPE_MASK) === SYMLINK_TYPE) return "symlink";
   return isDir ? "directory" : "file";
 }
 
-function parsedTime(value: string | Date | undefined): number {
-  if (value === undefined) return 0;
-  const time = value instanceof Date ? value.getTime() : Date.parse(value);
+function modificationTime(value: Date | undefined): number {
+  const time = value?.getTime() ?? 0;
   return Number.isFinite(time) ? time : 0;
 }
 
-function layerInfo(entry: FSLayerEntry): FileInfo {
-  return {
-    name: posix.basename(entry.path),
-    path: entry.path,
-    kind: entryKind(entry),
-    size: entry.size_bytes,
-    mtimeMs: parsedTime(entry.updated_at),
-  };
-}
-
-function baseInfo(path: string, info: Drive9BaseFileInfo | Drive9BaseStat): FileInfo {
+function materializeInfo(path: string, info: Drive9FileEntry | Drive9Stat): FileInfo {
   return {
     name: posix.basename(path),
     path,
-    kind: modeKind(info.mode, info.isDir),
+    kind: fileKind(info.mode, info.isDir),
     size: info.size,
-    mtimeMs: parsedTime(info.mtime),
+    mtimeMs: modificationTime(info.mtime),
   };
-}
-
-function unsupported(message: string, path?: string): Result<never, FileError> {
-  return err(new FileError("not_supported", message, path));
 }
 
 export class Drive9FileSystem implements FileSystem {
@@ -200,35 +163,17 @@ export class Drive9FileSystem implements FileSystem {
   readonly root: string;
   readonly tempRoot: string;
 
-  private readonly client: Drive9LayerFileSystemClient;
-  private readonly layerId: string;
-  private readonly maxLayerEntries: number;
-  private readonly maxViewRetries: number;
-  private readonly viewTimeoutMs: number;
-  private readonly temporaryPaths = new Set<string>();
+  private readonly client: Drive9FileSystemClient;
+  private readonly temporaryPaths = new Map<string, boolean>();
   private mutationTail: Promise<void> = Promise.resolve();
 
   constructor(options: Drive9FileSystemOptions) {
     this.client = options.client;
-    this.layerId = options.layerId.trim();
-    if (this.layerId.length === 0 || this.layerId.includes("\0")) throw new TypeError("layerId must be non-empty");
     this.root = normalizeRoot(options.root, "root");
     this.cwd = normalizeRoot(options.cwd ?? this.root, "cwd");
     this.tempRoot = normalizeRoot(options.tempRoot ?? posix.join(this.root, ".drive9-pi-tmp"), "tempRoot");
     if (!isWithin(this.root, this.cwd)) throw new TypeError("cwd must be inside root");
     if (!isWithin(this.root, this.tempRoot)) throw new TypeError("tempRoot must be inside root");
-    this.maxLayerEntries = options.maxLayerEntries ?? 10_000;
-    if (!Number.isSafeInteger(this.maxLayerEntries) || this.maxLayerEntries < 1 || this.maxLayerEntries > 1_000_000) {
-      throw new TypeError("maxLayerEntries must be between 1 and 1000000");
-    }
-    this.maxViewRetries = options.maxViewRetries ?? 3;
-    if (!Number.isSafeInteger(this.maxViewRetries) || this.maxViewRetries < 1 || this.maxViewRetries > 10) {
-      throw new TypeError("maxViewRetries must be between 1 and 10");
-    }
-    this.viewTimeoutMs = options.viewTimeoutMs ?? 30_000;
-    if (!Number.isSafeInteger(this.viewTimeoutMs) || this.viewTimeoutMs < 1 || this.viewTimeoutMs > 300_000) {
-      throw new TypeError("viewTimeoutMs must be between 1 and 300000");
-    }
   }
 
   async absolutePath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
@@ -250,7 +195,7 @@ export class Drive9FileSystem implements FileSystem {
     try {
       return ok(TEXT_DECODER.decode(result.value));
     } catch (error) {
-      return err(new FileError("invalid", "file is not valid UTF-8", this.addressedPath(path), errorValue(error)));
+      return err(new FileError("invalid", "file is not valid UTF-8", this.safeAddress(path), errorValue(error)));
     }
   }
 
@@ -271,28 +216,9 @@ export class Drive9FileSystem implements FileSystem {
   async readBinaryFile(path: string, abortSignal?: AbortSignal): Promise<Result<Uint8Array, FileError>> {
     return await this.operation(path, abortSignal, async () => {
       const addressed = this.addressedPath(path);
-      const view = await this.layerView();
-      await this.rejectSymlinkTraversal(addressed, view, true);
-      const entry = this.visibleEntry(addressed, view);
-      if (entry !== undefined) {
-        if (entry.op === "whiteout") throw new FileError("not_found", "file is hidden by a layer whiteout", addressed);
-        if (entry.path !== addressed) {
-          if (entry.kind === "symlink") {
-            throw new FileError("permission_denied", "symlink traversal is not supported", entry.path);
-          }
-          if (entry.kind !== "dir") throw new FileError("not_directory", "path ancestor is not a directory", entry.path);
-          throw new FileError("not_found", "path is hidden by an opaque layer directory", addressed);
-        }
-        if (entry.kind === "dir") throw new FileError("is_directory", "path is a directory", addressed);
-        if (entry.kind === "symlink") throw new FileError("not_supported", "symlink reads are not supported", addressed);
-        if (entry.op !== "upsert") throw new FileError("not_supported", `layer operation ${entry.op} is not readable`, addressed);
-        return Uint8Array.from(await this.client.readFSLayerFile(this.layerId, addressed, view.maxSeq));
-      }
-      const base = await this.client.stat(addressed);
-      if (base.isDir) throw new FileError("is_directory", "path is a directory", addressed);
-      if (modeKind(base.mode, base.isDir) === "symlink") {
-        throw new FileError("not_supported", "symlink reads are not supported", addressed);
-      }
+      const info = await this.statInfo(addressed);
+      if (info.kind === "directory") throw new FileError("is_directory", "path is a directory", addressed);
+      if (info.kind === "symlink") throw new FileError("not_supported", "symlink reads are not supported", addressed);
       return Uint8Array.from(await this.client.read(addressed));
     });
   }
@@ -305,31 +231,30 @@ export class Drive9FileSystem implements FileSystem {
     return await this.mutate(path, abortSignal, async () => {
       const addressed = this.addressedPath(path);
       if (addressed === this.root) throw new FileError("permission_denied", "workspace root cannot be overwritten", addressed);
-      let view = await this.layerView();
-      await this.rejectSymlinkTraversal(addressed, view, true);
-      await this.ensureParents(addressed, view);
-      view = await this.layerView();
-      const existing = await this.infoAt(addressed, view, true);
+      await this.ensureParents(addressed);
+      const existing = await this.optionalInfo(addressed);
       if (existing?.kind === "directory") throw new FileError("is_directory", "path is a directory", addressed);
-      const baseRevision = await this.baseRevisionAt(addressed, view);
-      await this.client.uploadFSLayerFile(
-        this.layerId,
-        addressed,
-        typeof content === "string" ? Buffer.from(content, "utf8") : Uint8Array.from(content),
-        { mode: 0o644, ...(baseRevision === undefined ? {} : { baseRevision }) },
-      );
+      if (existing?.kind === "symlink") throw new FileError("not_supported", "symlink writes are not supported", addressed);
+      const data = typeof content === "string" ? Buffer.from(content, "utf8") : Uint8Array.from(content);
+      await this.client.write(addressed, data);
     });
   }
 
-  async appendFile(path: string, _content: string | Uint8Array, abortSignal?: AbortSignal): Promise<Result<void, FileError>> {
-    const abort = this.aborted<void>(abortSignal, this.safeAddress(path));
-    if (abort !== undefined) return abort;
-    try {
+  async appendFile(
+    path: string,
+    content: string | Uint8Array,
+    abortSignal?: AbortSignal,
+  ): Promise<Result<void, FileError>> {
+    return await this.mutate(path, abortSignal, async () => {
       const addressed = this.addressedPath(path);
-      return unsupported("LayerFS append requires an atomic server append primitive", addressed);
-    } catch (error) {
-      return err(toFileError(error, this.safeAddress(path)));
-    }
+      if (addressed === this.root) throw new FileError("permission_denied", "workspace root cannot be appended", addressed);
+      await this.ensureParents(addressed);
+      const existing = await this.optionalInfo(addressed);
+      if (existing?.kind === "directory") throw new FileError("is_directory", "path is a directory", addressed);
+      if (existing?.kind === "symlink") throw new FileError("not_supported", "symlink appends are not supported", addressed);
+      const data = typeof content === "string" ? Buffer.from(content, "utf8") : Uint8Array.from(content);
+      await this.client.append(addressed, data);
+    });
   }
 
   async renameFile(
@@ -337,37 +262,45 @@ export class Drive9FileSystem implements FileSystem {
     destinationPath: string,
     abortSignal?: AbortSignal,
   ): Promise<Result<void, FileError>> {
-    const abort = this.aborted<void>(abortSignal, this.safeAddress(sourcePath));
-    if (abort !== undefined) return abort;
-    try {
-      this.addressedPath(sourcePath);
-      this.addressedPath(destinationPath);
-    } catch (error) {
-      return err(toFileError(error, this.safeAddress(sourcePath)));
-    }
-    return unsupported("LayerFS atomic rename requires a merged server rename contract", this.safeAddress(sourcePath));
+    return await this.mutate(sourcePath, abortSignal, async () => {
+      const source = this.addressedPath(sourcePath);
+      const destination = this.addressedPath(destinationPath);
+      if (source === this.root || destination === this.root) {
+        throw new FileError("permission_denied", "workspace root cannot be renamed or replaced", source);
+      }
+      await this.statInfo(source);
+      const parent = await this.statInfo(posix.dirname(destination));
+      if (parent.kind !== "directory") {
+        throw new FileError("not_directory", "destination parent is not a directory", parent.path);
+      }
+      await this.client.rename(source, destination);
+    });
   }
 
   async fileInfo(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo, FileError>> {
-    return await this.operation(path, abortSignal, async () => {
-      const addressed = this.addressedPath(path);
-      const view = await this.layerView();
-      await this.rejectSymlinkTraversal(addressed, view, false);
-      const info = await this.infoAt(addressed, view, false);
-      if (info === undefined) throw new FileError("not_found", "path does not exist", addressed);
-      return info;
-    });
+    return await this.operation(path, abortSignal, async () => await this.statInfo(this.addressedPath(path)));
   }
 
   async listDir(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo[], FileError>> {
     return await this.operation(path, abortSignal, async () => {
       const addressed = this.addressedPath(path);
-      const view = await this.layerView();
-      await this.rejectSymlinkTraversal(addressed, view, true);
-      const directory = await this.infoAt(addressed, view, true);
-      if (directory === undefined) throw new FileError("not_found", "directory does not exist", addressed);
+      const directory = await this.statInfo(addressed);
       if (directory.kind !== "directory") throw new FileError("not_directory", "path is not a directory", addressed);
-      return await this.listChildrenAt(addressed, view);
+      const children = (await this.client.list(addressed)).map((entry) => {
+        if (
+          typeof entry.name !== "string" ||
+          entry.name.length === 0 ||
+          entry.name === "." ||
+          entry.name === ".." ||
+          entry.name.includes("/") ||
+          entry.name.includes("\\") ||
+          entry.name.includes("\0")
+        ) {
+          throw new FileError("unknown", "Drive9 returned an invalid directory child", addressed);
+        }
+        return materializeInfo(posix.join(addressed, entry.name), entry);
+      });
+      return children.sort((left, right) => left.name.localeCompare(right.name));
     });
   }
 
@@ -375,7 +308,7 @@ export class Drive9FileSystem implements FileSystem {
     const info = await this.fileInfo(path, abortSignal);
     if (!info.ok) return info;
     if (info.value.kind === "symlink") {
-      return unsupported("Drive9 SDK does not expose LayerFS symlink canonicalization", info.value.path);
+      return err(new FileError("not_supported", "Drive9 SDK does not expose symlink canonicalization", info.value.path));
     }
     return ok(info.value.path);
   }
@@ -393,27 +326,13 @@ export class Drive9FileSystem implements FileSystem {
     return await this.mutate(path, options?.abortSignal, async () => {
       const addressed = this.addressedPath(path);
       if (addressed === this.root) return;
-      const recursive = options?.recursive ?? true;
-      if (!recursive) {
-        const view = await this.layerView();
-        await this.rejectSymlinkTraversal(addressed, view, false);
-        const parent = await this.infoAt(posix.dirname(addressed), view, true);
-        if (parent === undefined) throw new FileError("not_found", "parent directory does not exist", posix.dirname(addressed));
-        if (parent.kind !== "directory") throw new FileError("not_directory", "parent is not a directory", parent.path);
-        await this.createDirectoryEntry(addressed, view);
+      if (options?.recursive ?? true) {
+        for (const current of this.pathSegments(addressed)) await this.ensureDirectory(current);
         return;
       }
-      let view = await this.layerView();
-      for (const segment of this.relativeSegments(addressed)) {
-        const current = posix.join(this.root, ...segment);
-        const existing = await this.infoAt(current, view, true);
-        if (existing !== undefined) {
-          if (existing.kind !== "directory") throw new FileError("not_directory", "path component is not a directory", current);
-          continue;
-        }
-        await this.createDirectoryEntry(current, view);
-        view = await this.layerView();
-      }
+      const parent = await this.statInfo(posix.dirname(addressed));
+      if (parent.kind !== "directory") throw new FileError("not_directory", "parent is not a directory", parent.path);
+      await this.ensureDirectory(addressed);
     });
   }
 
@@ -421,38 +340,25 @@ export class Drive9FileSystem implements FileSystem {
     path: string,
     options?: { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal },
   ): Promise<Result<void, FileError>> {
-    let addressed: string;
-    try {
-      addressed = this.addressedPath(path);
-    } catch (error) {
-      return err(toFileError(error, this.safeAddress(path)));
-    }
-    const abort = this.aborted<void>(options?.abortSignal, addressed);
-    if (abort !== undefined) return abort;
-    if (options?.recursive === true) {
-      return unsupported("LayerFS recursive remove requires an atomic server primitive", addressed);
-    }
     return await this.mutate(path, options?.abortSignal, async () => {
-      const target = this.addressedPath(path);
-      if (target === this.root) throw new FileError("permission_denied", "workspace root cannot be removed", target);
-      const view = await this.layerView();
-      await this.rejectSymlinkTraversal(target, view, false);
-      const info = await this.infoAt(target, view, false);
+      const addressed = this.addressedPath(path);
+      if (addressed === this.root) throw new FileError("permission_denied", "workspace root cannot be removed", addressed);
+      const info = await this.optionalInfo(addressed);
       if (info === undefined) {
         if (options?.force === true) return;
-        throw new FileError("not_found", "path does not exist", target);
+        throw new FileError("not_found", "path does not exist", addressed);
+      }
+      if (options?.recursive === true) {
+        await this.client.removeAll(addressed);
+        return;
       }
       if (info.kind === "directory") {
-        const children = await this.listChildrenAt(target, view);
-        if (children.length > 0) throw new FileError("invalid", "directory is not empty", target);
+        const children = await this.client.list(addressed);
+        if (children.length > 0) throw new FileError("invalid", "directory is not empty", addressed);
+        await this.client.deleteDir(addressed);
+        return;
       }
-      const baseRevision = await this.baseRevisionAt(target, view);
-      await this.client.upsertFSLayerEntry(this.layerId, {
-        path: target,
-        op: "whiteout",
-        kind: info.kind === "directory" ? "dir" : info.kind,
-        ...(baseRevision === undefined ? {} : { baseRevision }),
-      });
+      await this.client.deleteFile(addressed);
     });
   }
 
@@ -479,12 +385,11 @@ export class Drive9FileSystem implements FileSystem {
   }
 
   async cleanup(): Promise<void> {
-    const paths = [...this.temporaryPaths].sort((left, right) => right.length - left.length);
+    const paths = [...this.temporaryPaths.entries()].sort(([left], [right]) => right.length - left.length);
     this.temporaryPaths.clear();
-    for (const path of paths) {
+    for (const [path, directory] of paths) {
       try {
-        const result = await this.remove(path, { force: true });
-        if (!result.ok) continue;
+        await this.remove(path, { recursive: directory, force: true });
       } catch {}
     }
   }
@@ -538,193 +443,39 @@ export class Drive9FileSystem implements FileSystem {
     return await running;
   }
 
-  private async layerView(): Promise<LayerView> {
-    const assembly = this.assembleLayerView();
-    return await new Promise<LayerView>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new FileError("unknown", `LayerFS view exceeded ${this.viewTimeoutMs}ms`, this.root));
-      }, this.viewTimeoutMs);
-      void assembly.then(
-        (view) => {
-          clearTimeout(timeout);
-          resolve(view);
-        },
-        (error: unknown) => {
-          clearTimeout(timeout);
-          reject(error);
-        },
-      );
-    });
+  private async statInfo(path: string): Promise<FileInfo> {
+    return materializeInfo(path, await this.client.stat(path));
   }
 
-  private async assembleLayerView(): Promise<LayerView> {
-    for (let attempt = 0; attempt < this.maxViewRetries; attempt += 1) {
-      const before = await this.client.getFSLayer(this.layerId);
-      if (posix.normalize(before.base_root_path) !== this.root) {
-        throw new FileError("invalid", "LayerFS base root does not match Drive9FileSystem root", this.root);
-      }
-      const entries = await this.client.diffFSLayer(this.layerId, before.durable_seq);
-      if (entries.length > this.maxLayerEntries) {
-        throw new FileError(
-          "not_supported",
-          `LayerFS view exceeds maxLayerEntries=${this.maxLayerEntries}`,
-          this.root,
-        );
-      }
-      const after = await this.client.getFSLayer(this.layerId);
-      if (after.durable_seq !== before.durable_seq) continue;
-      const byPath = new Map<string, FSLayerEntry>();
-      for (const entry of entries) {
-        if (entry.path !== posix.normalize(entry.path) || !isWithin(this.root, entry.path)) {
-          throw new FileError("unknown", "Drive9 returned a layer entry outside the configured root", entry.path);
-        }
-        byPath.set(entry.path, entry);
-      }
-      return { maxSeq: before.durable_seq, entries: byPath };
-    }
-    throw new FileError("unknown", "LayerFS changed while assembling a stable view", this.root);
-  }
-
-  private visibleEntry(path: string, view: LayerView): FSLayerEntry | undefined {
-    const exact = view.entries.get(path);
-    let opaqueDirectory: FSLayerEntry | undefined;
-    for (const ancestor of this.ancestors(path, false)) {
-      const entry = view.entries.get(ancestor);
-      if (entry === undefined) continue;
-      if (entry.op === "whiteout" || entry.kind !== "dir") return entry;
-      if (exact === undefined || exact.entry_seq <= entry.entry_seq) opaqueDirectory = entry;
-    }
-    return opaqueDirectory ?? exact;
-  }
-
-  private async infoAt(path: string, view: LayerView, rejectWhiteout: boolean): Promise<FileInfo | undefined> {
-    const entry = this.visibleEntry(path, view);
-    if (entry !== undefined) {
-      if (entry.op === "whiteout") {
-        if (rejectWhiteout) throw new FileError("not_found", "path is hidden by a layer whiteout", path);
-        return undefined;
-      }
-      if (entry.path !== path) {
-        if (entry.kind === "symlink") throw new FileError("permission_denied", "symlink traversal is not supported", entry.path);
-        if (entry.kind !== "dir") throw new FileError("not_directory", "path ancestor is not a directory", entry.path);
-        return undefined;
-      }
-      return this.materializedLayerInfo(entry);
-    }
+  private async optionalInfo(path: string): Promise<FileInfo | undefined> {
     try {
-      return baseInfo(path, await this.client.stat(path));
+      return await this.statInfo(path);
     } catch (error) {
       if (isMissing(error)) return undefined;
       throw error;
     }
   }
 
-  private async listChildrenAt(path: string, view: LayerView): Promise<FileInfo[]> {
-    const children = new Map<string, FileInfo>();
-    const directoryEntry = view.entries.get(path);
-    if (directoryEntry === undefined) {
-      try {
-        for (const info of await this.client.list(path)) {
-          if (info.name.includes("/") || info.name.includes("\\") || info.name === "." || info.name === "..") {
-            throw new FileError("unknown", "Drive9 returned an invalid directory child", path);
-          }
-          const childPath = posix.join(path, info.name);
-          children.set(info.name, baseInfo(childPath, info));
-        }
-      } catch (error) {
-        if (!isMissing(error)) throw error;
-      }
-    }
-
-    for (const entry of view.entries.values()) {
-      if (posix.dirname(entry.path) !== path) continue;
-      if (directoryEntry !== undefined && entry.entry_seq <= directoryEntry.entry_seq) continue;
-      const name = posix.basename(entry.path);
-      if (entry.op === "whiteout") children.delete(name);
-      else children.set(name, this.materializedLayerInfo(entry));
-    }
-    return [...children.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }
-
-  private async rejectSymlinkTraversal(path: string, view: LayerView, includeLeaf: boolean): Promise<void> {
-    const ancestors = this.ancestors(path, includeLeaf);
-    for (const ancestor of ancestors) {
-      const info = await this.infoAt(ancestor, view, false);
-      if (info?.kind === "symlink") {
-        throw new FileError("permission_denied", "symlink traversal is not supported", ancestor);
-      }
-    }
-  }
-
-  private ancestors(path: string, includeLeaf: boolean): string[] {
-    if (path === this.root) return includeLeaf ? [this.root] : [];
-    const parts = posix.relative(this.root, path).split("/");
-    const length = includeLeaf ? parts.length : Math.max(0, parts.length - 1);
-    const values: string[] = [];
-    for (let index = 1; index <= length; index += 1) values.push(posix.join(this.root, ...parts.slice(0, index)));
-    return values;
-  }
-
-  private relativeSegments(path: string): string[][] {
+  private pathSegments(path: string): string[] {
     const parts = posix.relative(this.root, path).split("/").filter((part) => part.length > 0);
-    return parts.map((_part, index) => parts.slice(0, index + 1));
+    return parts.map((_part, index) => posix.join(this.root, ...parts.slice(0, index + 1)));
   }
 
-  private async ensureParents(path: string, initialView: LayerView): Promise<void> {
-    let view = initialView;
-    for (const segment of this.relativeSegments(posix.dirname(path))) {
-      const current = posix.join(this.root, ...segment);
-      const info = await this.infoAt(current, view, false);
-      if (info !== undefined) {
-        if (info.kind !== "directory") throw new FileError("not_directory", "parent path is not a directory", current);
-        continue;
-      }
-      await this.createDirectoryEntry(current, view);
-      view = await this.layerView();
-    }
+  private async ensureParents(path: string): Promise<void> {
+    for (const parent of this.pathSegments(posix.dirname(path))) await this.ensureDirectory(parent);
   }
 
-  private async createDirectoryEntry(path: string, view: LayerView): Promise<void> {
-    const existing = await this.infoAt(path, view, false);
+  private async ensureDirectory(path: string): Promise<void> {
+    const existing = await this.optionalInfo(path);
     if (existing !== undefined) {
-      if (existing.kind !== "directory") throw new FileError("invalid", "path already exists and is not a directory", path);
+      if (existing.kind !== "directory") throw new FileError("not_directory", "path component is not a directory", path);
       return;
     }
-    const baseRevision = await this.baseRevisionAt(path, view);
-    await this.client.upsertFSLayerEntry(this.layerId, {
-      path,
-      op: "mkdir",
-      kind: "dir",
-      mode: 0o755,
-      ...(baseRevision === undefined ? {} : { baseRevision }),
-    });
-  }
-
-  private materializedLayerInfo(entry: FSLayerEntry): FileInfo {
-    if (entry.op !== "upsert" && entry.op !== "mkdir" && entry.op !== "symlink") {
-      throw new FileError("not_supported", `LayerFS operation ${entry.op} is not supported by the merged view`, entry.path);
-    }
-    if (entry.op === "mkdir" && entry.kind !== "dir") {
-      throw new FileError("unknown", "Drive9 returned a non-directory mkdir entry", entry.path);
-    }
-    if (entry.op === "symlink" && entry.kind !== "symlink") {
-      throw new FileError("unknown", "Drive9 returned a non-symlink symlink entry", entry.path);
-    }
-    return layerInfo(entry);
-  }
-
-  private async baseRevisionAt(path: string, view: LayerView): Promise<number | undefined> {
-    const exact = view.entries.get(path);
-    if (exact !== undefined && Number.isSafeInteger(exact.base_revision) && exact.base_revision > 0) {
-      return exact.base_revision;
-    }
-    const visible = this.visibleEntry(path, view);
-    if (visible !== undefined) return undefined;
     try {
-      const revision = (await this.client.stat(path)).revision;
-      return Number.isSafeInteger(revision) && revision > 0 ? revision : undefined;
+      await this.client.mkdir(path, 0o755);
     } catch (error) {
-      if (isMissing(error)) return undefined;
+      const concurrent = await this.optionalInfo(path);
+      if (concurrent?.kind === "directory") return;
       throw error;
     }
   }
@@ -752,7 +503,7 @@ export class Drive9FileSystem implements FileSystem {
           })
         : await this.writeFile(path, new Uint8Array(), signal);
       if (!created.ok) return created;
-      this.temporaryPaths.add(path);
+      this.temporaryPaths.set(path, directory);
       return ok(path);
     }
     return err(new FileError("unknown", "could not allocate a unique temporary path", this.tempRoot));

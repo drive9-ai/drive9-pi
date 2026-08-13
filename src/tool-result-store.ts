@@ -22,7 +22,6 @@ import {
   type SearchPage,
   type ToolResultIdentity,
   type ToolResultStore,
-  type WorkspaceRevision,
 } from "./tool-result-types.js";
 
 const HARD_MAX_CHUNK_BYTES = 64 * 1024;
@@ -58,7 +57,6 @@ interface ManifestBase {
   identity: ToolResultIdentity;
   toolName: string;
   mediaType: typeof MEDIA_TYPE;
-  workspaceBefore?: WorkspaceRevision;
 }
 
 interface WritingManifest extends ManifestBase {
@@ -86,7 +84,6 @@ interface NormalizedFinalizeInput {
   chunkCount: number;
   exitCode?: number;
   error?: { code: string; message: string };
-  workspaceAfter?: WorkspaceRevision;
 }
 
 interface TerminalAggregate {
@@ -244,40 +241,6 @@ function parseIdentity(value: unknown): ToolResultIdentity {
   }
 }
 
-function normalizeWorkspaceRevision(value: unknown, label: string): WorkspaceRevision {
-  const record = inputRecord(value, label);
-  const layerId = inputString(record.layerId, `${label}.layerId`);
-  const durableSeq = inputNonNegativeInteger(record.durableSeq, `${label}.durableSeq`);
-  const capturedAt = inputString(record.capturedAt, `${label}.capturedAt`);
-  if (
-    layerId.length === 0 ||
-    hasUnpairedSurrogate(layerId) ||
-    hasUnpairedSurrogate(capturedAt) ||
-    !Number.isFinite(Date.parse(capturedAt))
-  ) {
-    throw new ResultStoreError("invalid", `${label} is invalid`);
-  }
-  const snapshotId = record.snapshotId;
-  if (
-    snapshotId !== undefined &&
-    (typeof snapshotId !== "string" || snapshotId.length === 0 || hasUnpairedSurrogate(snapshotId))
-  ) {
-    throw new ResultStoreError("invalid", `${label}.snapshotId is invalid`);
-  }
-  return snapshotId === undefined ? { layerId, durableSeq, capturedAt } : { layerId, durableSeq, snapshotId, capturedAt };
-}
-
-function cloneWorkspaceRevision(value: WorkspaceRevision): WorkspaceRevision {
-  return value.snapshotId === undefined
-    ? { layerId: value.layerId, durableSeq: value.durableSeq, capturedAt: value.capturedAt }
-    : {
-        layerId: value.layerId,
-        durableSeq: value.durableSeq,
-        snapshotId: value.snapshotId,
-        capturedAt: value.capturedAt,
-      };
-}
-
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
   if (isRecord(value)) {
@@ -336,13 +299,7 @@ function normalizeBeginInput(input: BeginResultInput): BeginResultInput {
     throw new ResultStoreError("invalid", "toolName must be non-empty");
   }
   if (record.mediaType !== MEDIA_TYPE) throw new ResultStoreError("invalid", `mediaType must be ${MEDIA_TYPE}`);
-  const workspaceBefore =
-    record.workspaceBefore === undefined
-      ? undefined
-      : normalizeWorkspaceRevision(record.workspaceBefore, "workspaceBefore");
-  return workspaceBefore === undefined
-    ? { identity, toolName, mediaType: MEDIA_TYPE }
-    : { identity, toolName, mediaType: MEDIA_TYPE, workspaceBefore };
+  return { identity, toolName, mediaType: MEDIA_TYPE };
 }
 
 function normalizeFinalizeInput(input: FinalizeInput, maxChunks: number): NormalizedFinalizeInput {
@@ -374,14 +331,11 @@ function normalizeFinalizeInput(input: FinalizeInput, maxChunks: number): Normal
   ) {
     throw new ResultStoreError("invalid", "error must contain a non-empty code and a message");
   }
-  const workspaceAfter =
-    record.workspaceAfter === undefined ? undefined : normalizeWorkspaceRevision(record.workspaceAfter, "workspaceAfter");
   return {
     state,
     chunkCount,
     ...(exitCode === undefined ? {} : { exitCode }),
     ...(error === undefined ? {} : { error: { code: error.code as string, message: error.message as string } }),
-    ...(workspaceAfter === undefined ? {} : { workspaceAfter }),
   };
 }
 
@@ -402,15 +356,6 @@ function normalizeReadInteger(value: number, label: string, minimum: number, max
   return value;
 }
 
-function parseWorkspaceRevision(value: unknown, label: string): WorkspaceRevision | undefined {
-  if (value === undefined) return undefined;
-  try {
-    return normalizeWorkspaceRevision(value, label);
-  } catch (error) {
-    throw new ResultStoreError("corrupt", `${label} is invalid`, toError(error));
-  }
-}
-
 function parseFinalizeInput(value: unknown): NormalizedFinalizeInput {
   const record = requireRecord(value, "terminal.finalizeInput");
   const state = requireString(record.state, "terminal.finalizeInput.state") as FinalizeInput["state"];
@@ -424,7 +369,6 @@ function parseFinalizeInput(value: unknown): NormalizedFinalizeInput {
       message: requireString(errorRecord.message, "terminal.finalizeInput.error.message"),
     };
   }
-  const workspaceAfter = parseWorkspaceRevision(record.workspaceAfter, "terminal.finalizeInput.workspaceAfter");
   try {
     return normalizeFinalizeInput(
       {
@@ -432,7 +376,6 @@ function parseFinalizeInput(value: unknown): NormalizedFinalizeInput {
         chunkCount,
         ...(exitCode === undefined ? {} : { exitCode }),
         ...(error === undefined ? {} : { error }),
-        ...(workspaceAfter === undefined ? {} : { workspaceAfter }),
       },
       HARD_MAX_CHUNKS,
     );
@@ -494,7 +437,6 @@ function parseManifestObject(object: ResultStoreObject, expectedResultId: string
   const toolName = requireString(record.toolName, "manifest.toolName");
   const mediaType = requireString(record.mediaType, "manifest.mediaType");
   if (toolName.length === 0 || mediaType !== MEDIA_TYPE) throw new ResultStoreError("corrupt", "manifest metadata is invalid");
-  const workspaceBefore = parseWorkspaceRevision(record.workspaceBefore, "manifest.workspaceBefore");
   const state = requireString(record.state, "manifest.state") as ResultState;
   const base = {
     schemaVersion: 1 as const,
@@ -502,7 +444,6 @@ function parseManifestObject(object: ResultStoreObject, expectedResultId: string
     identity,
     toolName,
     mediaType: MEDIA_TYPE,
-    ...(workspaceBefore === undefined ? {} : { workspaceBefore }),
   };
   if (state === "writing") {
     return {
@@ -630,7 +571,6 @@ function makeWritingManifest(resultId: string, input: BeginResultInput): Writing
     identity: cloneIdentity(input.identity),
     toolName: input.toolName,
     mediaType: MEDIA_TYPE,
-    ...(input.workspaceBefore === undefined ? {} : { workspaceBefore: cloneWorkspaceRevision(input.workspaceBefore) }),
     state: "writing",
     committedChunkCount: 0,
     committedTotalBytes: 0,
@@ -641,8 +581,7 @@ function manifestsMatchBegin(manifest: StoredManifest, input: BeginResultInput):
   return (
     canonicalJson(manifest.identity) === canonicalJson(input.identity) &&
     manifest.toolName === input.toolName &&
-    manifest.mediaType === input.mediaType &&
-    canonicalJson(manifest.workspaceBefore ?? null) === canonicalJson(input.workspaceBefore ?? null)
+    manifest.mediaType === input.mediaType
   );
 }
 
@@ -667,12 +606,6 @@ function statFromTerminal(manifest: TerminalManifest, revision: number): ResultS
     ...(finalize.error === undefined
       ? {}
       : { error: { code: finalize.error.code, message: finalize.error.message } }),
-    ...(manifest.workspaceBefore === undefined
-      ? {}
-      : { workspaceBefore: cloneWorkspaceRevision(manifest.workspaceBefore) }),
-    ...(finalize.workspaceAfter === undefined
-      ? {}
-      : { workspaceAfter: cloneWorkspaceRevision(finalize.workspaceAfter) }),
     manifestRevision: revision,
   };
 }
@@ -688,9 +621,6 @@ function terminalManifest(
     identity: cloneIdentity(writing.identity),
     toolName: writing.toolName,
     mediaType: MEDIA_TYPE,
-    ...(writing.workspaceBefore === undefined
-      ? {}
-      : { workspaceBefore: cloneWorkspaceRevision(writing.workspaceBefore) }),
     state: input.state,
     terminal: {
       finalizeInput: input,
@@ -997,12 +927,6 @@ export class PersistentToolResultStore implements ToolResultStore {
       startByte,
       endByte,
       ...(endByte < manifest.terminal.totalBytes ? { nextOffset: endByte } : {}),
-      ...(manifest.workspaceBefore === undefined
-        ? {}
-        : { workspaceBefore: cloneWorkspaceRevision(manifest.workspaceBefore) }),
-      ...(manifest.terminal.finalizeInput.workspaceAfter === undefined
-        ? {}
-        : { workspaceAfter: cloneWorkspaceRevision(manifest.terminal.finalizeInput.workspaceAfter) }),
     };
   }
 
@@ -1487,9 +1411,6 @@ export class PersistentToolResultStore implements ToolResultStore {
       chunkCount: aggregate.chunkCount,
       totalBytes: aggregate.totalBytes,
       totalLines: aggregate.totalLines,
-      ...(manifest.workspaceBefore === undefined
-        ? {}
-        : { workspaceBefore: cloneWorkspaceRevision(manifest.workspaceBefore) }),
       manifestRevision: revision,
     };
   }
@@ -1548,12 +1469,6 @@ export class PersistentToolResultStore implements ToolResultStore {
       startLine,
       endLine,
       ...(nextCursor === undefined ? {} : { nextCursor }),
-      ...(manifest.workspaceBefore === undefined
-        ? {}
-        : { workspaceBefore: cloneWorkspaceRevision(manifest.workspaceBefore) }),
-      ...(manifest.terminal.finalizeInput.workspaceAfter === undefined
-        ? {}
-        : { workspaceAfter: cloneWorkspaceRevision(manifest.terminal.finalizeInput.workspaceAfter) }),
     };
   }
 
@@ -1570,12 +1485,6 @@ export class PersistentToolResultStore implements ToolResultStore {
       matches,
       scannedBytes,
       ...(nextCursor === undefined ? {} : { nextCursor }),
-      ...(manifest.workspaceBefore === undefined
-        ? {}
-        : { workspaceBefore: cloneWorkspaceRevision(manifest.workspaceBefore) }),
-      ...(manifest.terminal.finalizeInput.workspaceAfter === undefined
-        ? {}
-        : { workspaceAfter: cloneWorkspaceRevision(manifest.terminal.finalizeInput.workspaceAfter) }),
     };
   }
 

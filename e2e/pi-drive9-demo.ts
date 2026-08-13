@@ -10,7 +10,6 @@ import {
   createResultReadTool,
   createResultSearchTool,
 } from "../src/pi-adapters.js";
-import { Drive9LayerWorkspaceRevisionProvider } from "../src/workspace-revision.js";
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -34,7 +33,6 @@ async function main(): Promise<void> {
   const baseUrl = requiredEnvironment("DRIVE9_PI_BASE_URL");
   const workspaceRoot = requiredEnvironment("DRIVE9_PI_WORKSPACE_REMOTE_ROOT");
   const evidenceRoot = requiredEnvironment("DRIVE9_PI_EVIDENCE_REMOTE_ROOT");
-  const layerId = requiredEnvironment("DRIVE9_PI_LAYER_ID");
   const workspaceKey = requiredEnvironment("DRIVE9_PI_WORKSPACE_API_KEY");
   const evidenceKey = requiredEnvironment("DRIVE9_PI_EVIDENCE_API_KEY");
   const workspaceClient = new Client(baseUrl, workspaceKey);
@@ -47,13 +45,7 @@ async function main(): Promise<void> {
     evidenceClient,
   });
 
-  const fileSystem = new Drive9FileSystem({ client: workspaceClient, layerId, root: workspaceRoot });
-  const revisions = new Drive9LayerWorkspaceRevisionProvider({
-    client: workspaceClient,
-    layerId,
-    checkpointLabel: "drive9-pi-sdk-demo",
-    checkpointId: () => `pi-${randomUUID()}`,
-  });
+  const fileSystem = new Drive9FileSystem({ client: workspaceClient, root: workspaceRoot });
   const store = createDrive9ResultStore({ client: evidenceClient, evidenceRoot });
   const fixturePath = posix.join(workspaceRoot, `.drive9-pi-${randomUUID()}.txt`);
   const written = await fileSystem.writeFile(fixturePath, "sdk-backed workspace\n");
@@ -67,7 +59,6 @@ async function main(): Promise<void> {
     store,
     thresholdBytes: 1024,
     allocateIdentity: ({ toolCallId }) => ({ sessionId, runId, toolCallId, attempt: 0 }),
-    workspaceRevisionProvider: revisions,
   });
   const source = `${"durable customer tool output\n".repeat(256)}known-demo-marker\n`;
   const compact = await fallback(fallbackContext(source));

@@ -1,10 +1,9 @@
-export { composeExecutionEnv, type ComposeExecutionEnvOptions } from "./compose-execution-env.js";
 export {
   Drive9FileSystem,
-  type Drive9BaseFileInfo,
-  type Drive9BaseStat,
+  type Drive9FileEntry,
+  type Drive9FileSystemClient,
   type Drive9FileSystemOptions,
-  type Drive9LayerFileSystemClient,
+  type Drive9Stat,
 } from "./drive9-file-system.js";
 export {
   createDrive9ResultStore,
@@ -54,11 +53,4 @@ export {
   type SearchPage,
   type ToolResultIdentity,
   type ToolResultStore,
-  type WorkspaceRevision,
 } from "./tool-result-types.js";
-export {
-  Drive9LayerWorkspaceRevisionProvider,
-  type Drive9CheckpointClient,
-  type Drive9LayerWorkspaceRevisionProviderOptions,
-  type WorkspaceRevisionProvider,
-} from "./workspace-revision.js";

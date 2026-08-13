@@ -2,12 +2,11 @@ import assert from "node:assert/strict";
 import { posix } from "node:path";
 import { describe, it } from "node:test";
 import { getOrThrow, type Result } from "@earendil-works/pi-agent-core";
-import type { FSLayer, FSLayerEntry } from "drive9";
 import {
   Drive9FileSystem,
-  type Drive9BaseFileInfo,
-  type Drive9BaseStat,
-  type Drive9LayerFileSystemClient,
+  type Drive9FileEntry,
+  type Drive9FileSystemClient,
+  type Drive9Stat,
 } from "../src/drive9-file-system.js";
 
 class StatusError extends Error {
@@ -19,7 +18,7 @@ class StatusError extends Error {
   }
 }
 
-interface BaseNode {
+interface Node {
   data: Uint8Array;
   isDir: boolean;
   revision: number;
@@ -27,139 +26,63 @@ interface BaseNode {
   mtime: Date;
 }
 
-class FakeLayerClient implements Drive9LayerFileSystemClient {
-  readonly root = "/workspace";
-  readonly base = new Map<string, BaseNode>();
-  readonly entries = new Map<string, FSLayerEntry>();
-  readonly layerData = new Map<string, Uint8Array>();
-  readonly uploadCalls: Array<{ path: string; baseRevision?: number }> = [];
-  readonly entryCalls: Array<{ path: string; op: string; baseRevision?: number }> = [];
-  getCalls = 0;
-  diffCalls = 0;
-  readCalls = 0;
-  statCalls = 0;
-  listCalls = 0;
-  advanceAfterNextDiff = false;
-  failGet: unknown;
-  private sequence = 0;
+class FakeClient implements Drive9FileSystemClient {
+  readonly nodes = new Map<string, Node>();
+  readonly calls: Array<{ method: string; paths: string[] }> = [];
+  failNext: unknown;
+  private revision = 1;
 
-  constructor() {
-    this.addBaseDirectory(this.root, 1);
+  constructor(readonly root = "/workspace") {
+    this.addDirectory(root);
   }
 
-  get mutationCount(): number {
-    return this.uploadCalls.length + this.entryCalls.length;
+  get callCount(): number {
+    return this.calls.length;
   }
 
-  get totalCallCount(): number {
-    return this.getCalls + this.diffCalls + this.readCalls + this.statCalls + this.listCalls + this.mutationCount;
+  addDirectory(path: string, mode = 0o40755): void {
+    this.nodes.set(path, this.node(new Uint8Array(), true, mode));
   }
 
-  addBaseDirectory(path: string, revision = 1): void {
-    this.base.set(path, {
-      data: new Uint8Array(),
-      isDir: true,
-      revision,
-      mode: 0o40755,
-      mtime: new Date("2026-08-13T00:00:00Z"),
-    });
+  addFile(path: string, content: string, mode = 0o100644): void {
+    this.nodes.set(path, this.node(Buffer.from(content), false, mode));
   }
 
-  addBaseFile(path: string, text: string, revision = 1): void {
-    this.base.set(path, {
-      data: Buffer.from(text),
-      isDir: false,
-      revision,
-      mode: 0o100644,
-      mtime: new Date("2026-08-13T00:00:00Z"),
-    });
-  }
-
-  async getFSLayer(layerId: string): Promise<FSLayer> {
-    this.getCalls += 1;
-    if (this.failGet !== undefined) throw this.failGet;
-    return {
-      layer_id: layerId,
-      base_root_path: this.root,
-      name: "test",
-      state: "active",
-      durability_mode: "sync",
-      actor_id: "test",
-      durable_seq: this.sequence,
-      created_at: "2026-08-13T00:00:00Z",
-      updated_at: "2026-08-13T00:00:00Z",
-    };
-  }
-
-  async diffFSLayer(_layerId: string, maxSeq?: number): Promise<FSLayerEntry[]> {
-    this.diffCalls += 1;
-    const entries = [...this.entries.values()].filter((entry) => maxSeq === undefined || entry.entry_seq <= maxSeq);
-    if (this.advanceAfterNextDiff) {
-      this.advanceAfterNextDiff = false;
-      this.sequence += 1;
-    }
-    return entries;
-  }
-
-  async readFSLayerFile(_layerId: string, path: string): Promise<Uint8Array> {
-    this.readCalls += 1;
-    const data = this.layerData.get(path);
-    if (data === undefined) throw new StatusError(404);
-    return Uint8Array.from(data);
-  }
-
-  async uploadFSLayerFile(
-    layerId: string,
-    path: string,
-    data: Uint8Array,
-    options?: { baseRevision?: number; mode?: number },
-  ): Promise<FSLayerEntry> {
-    this.uploadCalls.push({ path, ...(options?.baseRevision === undefined ? {} : { baseRevision: options.baseRevision }) });
-    this.layerData.set(path, Uint8Array.from(data));
-    return this.putEntry(layerId, path, "upsert", "file", data.byteLength, options?.baseRevision ?? 0, options?.mode);
-  }
-
-  async upsertFSLayerEntry(
-    layerId: string,
-    request: {
-      path: string;
-      op: "mkdir" | "whiteout";
-      kind: "file" | "dir" | "symlink";
-      mode?: number;
-      baseRevision?: number;
-    },
-  ): Promise<FSLayerEntry> {
-    this.entryCalls.push({
-      path: request.path,
-      op: request.op,
-      ...(request.baseRevision === undefined ? {} : { baseRevision: request.baseRevision }),
-    });
-    if (request.op === "whiteout") this.layerData.delete(request.path);
-    return this.putEntry(
-      layerId,
-      request.path,
-      request.op,
-      request.kind,
-      0,
-      request.baseRevision ?? 0,
-      request.mode,
-    );
+  text(path: string): string {
+    const node = this.nodes.get(path);
+    if (node === undefined || node.isDir) throw new Error(`not a file: ${path}`);
+    return Buffer.from(node.data).toString("utf8");
   }
 
   async read(path: string): Promise<Uint8Array> {
-    this.readCalls += 1;
-    const node = this.base.get(path);
-    if (node === undefined) throw new StatusError(404);
-    if (node.isDir) throw new StatusError(400);
+    this.record("read", path);
+    const node = this.required(path);
+    if (node.isDir) throw new StatusError(400, `is a directory: ${path}`);
     return Uint8Array.from(node.data);
   }
 
-  async list(path: string): Promise<Drive9BaseFileInfo[]> {
-    this.listCalls += 1;
-    const directory = this.base.get(path);
-    if (directory === undefined) throw new StatusError(404);
-    if (!directory.isDir) throw new StatusError(400);
-    return [...this.base.entries()]
+  async write(path: string, data: Uint8Array): Promise<void> {
+    this.record("write", path);
+    this.requireDirectory(posix.dirname(path));
+    this.nodes.set(path, this.node(data, false, 0o100644));
+  }
+
+  async append(path: string, data: Uint8Array): Promise<void> {
+    this.record("append", path);
+    this.requireDirectory(posix.dirname(path));
+    const current = this.nodes.get(path);
+    if (current?.isDir === true) throw new StatusError(400, `is a directory: ${path}`);
+    const existing = current?.data ?? new Uint8Array();
+    const combined = new Uint8Array(existing.byteLength + data.byteLength);
+    combined.set(existing);
+    combined.set(data, existing.byteLength);
+    this.nodes.set(path, this.node(combined, false, current?.mode ?? 0o100644));
+  }
+
+  async list(path: string): Promise<Drive9FileEntry[]> {
+    this.record("list", path);
+    this.requireDirectory(path);
+    return [...this.nodes.entries()]
       .filter(([candidate]) => candidate !== path && posix.dirname(candidate) === path)
       .map(([candidate, node]) => ({
         name: posix.basename(candidate),
@@ -170,10 +93,9 @@ class FakeLayerClient implements Drive9LayerFileSystemClient {
       }));
   }
 
-  async stat(path: string): Promise<Drive9BaseStat> {
-    this.statCalls += 1;
-    const node = this.base.get(path);
-    if (node === undefined) throw new StatusError(404);
+  async stat(path: string): Promise<Drive9Stat> {
+    this.record("stat", path);
+    const node = this.required(path);
     return {
       size: node.data.byteLength,
       isDir: node.isDir,
@@ -183,53 +105,86 @@ class FakeLayerClient implements Drive9LayerFileSystemClient {
     };
   }
 
-  private putEntry(
-    layerId: string,
-    path: string,
-    op: FSLayerEntry["op"],
-    kind: FSLayerEntry["kind"],
-    size: number,
-    baseRevision: number,
-    mode = kind === "dir" ? 0o755 : 0o644,
-  ): FSLayerEntry {
-    this.sequence += 1;
-    const entry: FSLayerEntry = {
-      layer_id: layerId,
-      path,
-      parent_path: posix.dirname(path),
-      name: posix.basename(path),
-      op,
-      kind,
-      base_inode_id: "",
-      base_revision: baseRevision,
-      storage_type: op === "upsert" ? "s3" : "",
-      storage_ref: op === "upsert" ? `layers/${layerId}/${this.sequence}` : "",
-      storage_ref_hash: "",
-      storage_encryption_mode: "none",
-      storage_encryption_key_id: "",
-      checksum_sha256: "",
-      size_bytes: size,
+  async rename(sourcePath: string, destinationPath: string): Promise<void> {
+    this.record("rename", sourcePath, destinationPath);
+    this.requireDirectory(posix.dirname(destinationPath));
+    const source = this.required(sourcePath);
+    const replacements = [...this.nodes.entries()].filter(
+      ([path]) => path === sourcePath || path.startsWith(`${sourcePath}/`),
+    );
+    this.nodes.delete(destinationPath);
+    for (const [path] of replacements) this.nodes.delete(path);
+    for (const [path, node] of replacements) {
+      this.nodes.set(`${destinationPath}${path.slice(sourcePath.length)}`, node);
+    }
+    if (replacements.length === 0) this.nodes.set(destinationPath, source);
+  }
+
+  async mkdir(path: string, mode = 0o755): Promise<void> {
+    this.record("mkdir", path);
+    this.requireDirectory(posix.dirname(path));
+    if (this.nodes.has(path)) throw new StatusError(409, `already exists: ${path}`);
+    this.nodes.set(path, this.node(new Uint8Array(), true, 0o40000 | mode));
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    this.record("deleteFile", path);
+    const node = this.required(path);
+    if (node.isDir) throw new StatusError(400, `is a directory: ${path}`);
+    this.nodes.delete(path);
+  }
+
+  async deleteDir(path: string): Promise<void> {
+    this.record("deleteDir", path);
+    this.requireDirectory(path);
+    if ([...this.nodes.keys()].some((candidate) => candidate !== path && posix.dirname(candidate) === path)) {
+      throw new StatusError(400, `directory not empty: ${path}`);
+    }
+    this.nodes.delete(path);
+  }
+
+  async removeAll(path: string): Promise<void> {
+    this.record("removeAll", path);
+    this.required(path);
+    for (const candidate of [...this.nodes.keys()]) {
+      if (candidate === path || candidate.startsWith(`${path}/`)) this.nodes.delete(candidate);
+    }
+  }
+
+  private node(data: Uint8Array, isDir: boolean, mode: number): Node {
+    return {
+      data: Uint8Array.from(data),
+      isDir,
+      revision: this.revision++,
       mode,
-      entry_seq: this.sequence,
-      created_at: "2026-08-13T00:00:00Z",
-      updated_at: "2026-08-13T00:00:00Z",
+      mtime: new Date("2026-08-13T00:00:00Z"),
     };
-    this.entries.set(path, entry);
-    return entry;
+  }
+
+  private required(path: string): Node {
+    const node = this.nodes.get(path);
+    if (node === undefined) throw new Error(`not found: ${path}`);
+    return node;
+  }
+
+  private requireDirectory(path: string): Node {
+    const node = this.required(path);
+    if (!node.isDir) throw new StatusError(400, `not a directory: ${path}`);
+    return node;
+  }
+
+  private record(method: string, ...paths: string[]): void {
+    if (this.failNext !== undefined) {
+      const failure = this.failNext;
+      this.failNext = undefined;
+      throw failure;
+    }
+    this.calls.push({ method, paths });
   }
 }
 
-function createFileSystem(
-  client = new FakeLayerClient(),
-  options?: { maxLayerEntries?: number; viewTimeoutMs?: number },
-): Drive9FileSystem {
-  return new Drive9FileSystem({
-    client,
-    layerId: "layer-1",
-    root: client.root,
-    ...(options?.maxLayerEntries === undefined ? {} : { maxLayerEntries: options.maxLayerEntries }),
-    ...(options?.viewTimeoutMs === undefined ? {} : { viewTimeoutMs: options.viewTimeoutMs }),
-  });
+function createFileSystem(client = new FakeClient()): Drive9FileSystem {
+  return new Drive9FileSystem({ client, root: client.root });
 }
 
 function assertErrorCode(result: Result<unknown, { code: string }>, code: string): void {
@@ -238,141 +193,142 @@ function assertErrorCode(result: Result<unknown, { code: string }>, code: string
 }
 
 describe("Drive9FileSystem", () => {
-  it("uses only LayerFS SDK mutations and preserves base revision", async () => {
-    const client = new FakeLayerClient();
-    client.addBaseFile("/workspace/file.txt", "base", 9);
+  it("maps the Pi filesystem contract to ordinary Drive9 SDK operations", async () => {
+    const client = new FakeClient();
     const fileSystem = createFileSystem(client);
 
-    getOrThrow(await fileSystem.writeFile("file.txt", "layer"));
-    assert.deepEqual(client.uploadCalls, [{ path: "/workspace/file.txt", baseRevision: 9 }]);
-    assert.equal(getOrThrow(await fileSystem.readTextFile("file.txt")), "layer");
-    assert.equal(Buffer.from(getOrThrow(await fileSystem.readBinaryFile("file.txt"))).toString(), "layer");
-  });
+    getOrThrow(await fileSystem.writeFile("src/auth.ts", "first"));
+    getOrThrow(await fileSystem.appendFile("src/auth.ts", " second"));
+    assert.equal(getOrThrow(await fileSystem.readTextFile("src/auth.ts")), "first second");
 
-  it("merges base and layer with whiteout, shadow, recreate, and deterministic ordering", async () => {
-    const client = new FakeLayerClient();
-    client.addBaseFile("/workspace/base-only.txt", "base-only");
-    client.addBaseFile("/workspace/hidden.txt", "hidden");
-    client.addBaseFile("/workspace/shared.txt", "old");
-    client.addBaseDirectory("/workspace/recreated");
-    client.addBaseFile("/workspace/recreated/old-child.txt", "old-child");
-    await client.uploadFSLayerFile("layer-1", "/workspace/shared.txt", Buffer.from("new"));
-    await client.upsertFSLayerEntry("layer-1", { path: "/workspace/hidden.txt", op: "whiteout", kind: "file" });
-    await client.upsertFSLayerEntry("layer-1", { path: "/workspace/recreated", op: "whiteout", kind: "dir" });
-    await client.upsertFSLayerEntry("layer-1", { path: "/workspace/recreated", op: "mkdir", kind: "dir" });
-    await client.uploadFSLayerFile("layer-1", "/workspace/recreated/new-child.txt", Buffer.from("new-child"));
-    const fileSystem = createFileSystem(client);
-
-    assert.equal(getOrThrow(await fileSystem.readTextFile("shared.txt")), "new");
-    assertErrorCode(await fileSystem.fileInfo("hidden.txt"), "not_found");
+    getOrThrow(await fileSystem.renameFile("src/auth.ts", "src/login.ts"));
+    assert.equal(getOrThrow(await fileSystem.exists("src/auth.ts")), false);
+    assert.equal(getOrThrow(await fileSystem.readTextFile("src/login.ts")), "first second");
     assert.deepEqual(
-      getOrThrow(await fileSystem.listDir(".")).map(({ name }) => name),
-      ["base-only.txt", "recreated", "shared.txt"],
+      getOrThrow(await fileSystem.listDir("src")).map((entry) => entry.name),
+      ["login.ts"],
     );
+
+    getOrThrow(await fileSystem.remove("src", { recursive: true }));
+    assert.equal(getOrThrow(await fileSystem.exists("src")), false);
     assert.deepEqual(
-      getOrThrow(await fileSystem.listDir("recreated")).map(({ name }) => name),
-      ["new-child.txt"],
+      client.calls.filter((call) => ["write", "append", "rename", "removeAll"].includes(call.method)),
+      [
+        { method: "write", paths: ["/workspace/src/auth.ts"] },
+        { method: "append", paths: ["/workspace/src/auth.ts"] },
+        { method: "rename", paths: ["/workspace/src/auth.ts", "/workspace/src/login.ts"] },
+        { method: "removeAll", paths: ["/workspace/src"] },
+      ],
     );
-    assertErrorCode(await fileSystem.fileInfo("recreated/old-child.txt"), "not_found");
   });
 
-  it("preserves every child returned by the non-paginated base list contract", async () => {
-    const client = new FakeLayerClient();
-    for (let index = 0; index < 1_025; index += 1) {
-      client.addBaseFile(`/workspace/file-${index.toString().padStart(4, "0")}.txt`, String(index));
-    }
+  it("creates recursive parents and preserves direct non-recursive mkdir behavior", async () => {
+    const client = new FakeClient();
     const fileSystem = createFileSystem(client);
 
-    const entries = getOrThrow(await fileSystem.listDir("."));
-    assert.equal(entries.length, 1_025);
-    assert.equal(entries[0]?.name, "file-0000.txt");
-    assert.equal(entries.at(-1)?.name, "file-1024.txt");
-    assert.equal(client.listCalls, 1);
+    getOrThrow(await fileSystem.createDir("a/b/c"));
+    assert.equal(getOrThrow(await fileSystem.fileInfo("a/b/c")).kind, "directory");
+    assert.deepEqual(
+      client.calls.filter((call) => call.method === "mkdir"),
+      [
+        { method: "mkdir", paths: ["/workspace/a"] },
+        { method: "mkdir", paths: ["/workspace/a/b"] },
+        { method: "mkdir", paths: ["/workspace/a/b/c"] },
+      ],
+    );
+
+    assertErrorCode(await fileSystem.createDir("missing/child", { recursive: false }), "not_found");
+    client.addFile("/workspace/file-parent", "not a directory");
+    assertErrorCode(await fileSystem.writeFile("file-parent/child", "x"), "not_directory");
   });
 
-  it("whiteouts a single object without deleting base storage", async () => {
-    const client = new FakeLayerClient();
-    client.addBaseFile("/workspace/remove.txt", "keep-in-base", 4);
+  it("sorts listings and rejects malformed backend child names", async () => {
+    const client = new FakeClient();
+    client.addFile("/workspace/z.txt", "z");
+    client.addDirectory("/workspace/a");
     const fileSystem = createFileSystem(client);
 
-    getOrThrow(await fileSystem.remove("remove.txt"));
-    assert.equal(client.base.has("/workspace/remove.txt"), true);
-    assert.deepEqual(client.entryCalls, [{ path: "/workspace/remove.txt", op: "whiteout", baseRevision: 4 }]);
-    assert.equal(getOrThrow(await fileSystem.exists("remove.txt")), false);
+    assert.deepEqual(
+      getOrThrow(await fileSystem.listDir(".")).map((entry) => [entry.name, entry.kind]),
+      [
+        ["a", "directory"],
+        ["z.txt", "file"],
+      ],
+    );
+
+    client.list = async () => [{ name: "../escape", size: 0, isDir: false }];
+    assertErrorCode(await fileSystem.listDir("."), "unknown");
   });
 
-  it("uses one stable layer view for directory emptiness and whiteout", async () => {
-    const client = new FakeLayerClient();
-    client.addBaseDirectory("/workspace/empty", 7);
+  it("handles symlinks without silently following them", async () => {
+    const client = new FakeClient();
+    client.addFile("/workspace/link", "target", 0o120777);
     const fileSystem = createFileSystem(client);
 
-    getOrThrow(await fileSystem.remove("empty"));
-    assert.equal(client.diffCalls, 1);
-    assert.deepEqual(client.entryCalls, [{ path: "/workspace/empty", op: "whiteout", baseRevision: 7 }]);
+    assert.equal(getOrThrow(await fileSystem.fileInfo("link")).kind, "symlink");
+    assertErrorCode(await fileSystem.readBinaryFile("link"), "not_supported");
+    assertErrorCode(await fileSystem.writeFile("link", "replacement"), "not_supported");
+    assertErrorCode(await fileSystem.canonicalPath("link"), "not_supported");
+    assert.equal(client.text("/workspace/link"), "target");
   });
 
-  it("fails unsupported append, rename, and recursive remove before mutation", async () => {
-    const client = new FakeLayerClient();
+  it("implements force, non-empty, recursive, and root removal semantics", async () => {
+    const client = new FakeClient();
+    client.addDirectory("/workspace/dir");
+    client.addFile("/workspace/dir/file", "x");
     const fileSystem = createFileSystem(client);
 
-    assertErrorCode(await fileSystem.appendFile("file.txt", "x"), "not_supported");
-    assertErrorCode(await fileSystem.renameFile("from.txt", "to.txt"), "not_supported");
-    assertErrorCode(await fileSystem.remove("directory", { recursive: true }), "not_supported");
-    assert.equal(client.mutationCount, 0);
+    assertErrorCode(await fileSystem.remove("dir"), "invalid");
+    assert.equal(client.nodes.has("/workspace/dir/file"), true);
+    getOrThrow(await fileSystem.remove("missing", { force: true }));
+    assertErrorCode(await fileSystem.remove("missing"), "not_found");
+    assertErrorCode(await fileSystem.remove("."), "permission_denied");
+
+    getOrThrow(await fileSystem.remove("dir", { recursive: true }));
+    assert.equal(client.nodes.has("/workspace/dir"), false);
+    assert.equal(client.nodes.has("/workspace/dir/file"), false);
   });
 
-  it("rejects root escape before any backend call", async () => {
-    const client = new FakeLayerClient();
+  it("rejects root escape before any Drive9 SDK call", async () => {
+    const client = new FakeClient();
     const fileSystem = createFileSystem(client);
+    const before = client.callCount;
 
     assertErrorCode(await fileSystem.readTextFile("../secret"), "permission_denied");
-    assertErrorCode(await fileSystem.writeFile("/outside/file", "blocked"), "permission_denied");
-    assertErrorCode(await fileSystem.remove("../outside", { recursive: true }), "permission_denied");
-    assert.equal(client.totalCallCount, 0);
+    assertErrorCode(await fileSystem.writeFile("/other/file", "x"), "permission_denied");
+    assertErrorCode(await fileSystem.renameFile("../source", "target"), "permission_denied");
+    assert.equal(client.callCount, before);
   });
 
-  it("retries a moved layer sequence and caps whole-layer enumeration", async () => {
-    const retryClient = new FakeLayerClient();
-    retryClient.advanceAfterNextDiff = true;
-    const retryFileSystem = createFileSystem(retryClient);
-    assert.equal(getOrThrow(await retryFileSystem.fileInfo(".")).kind, "directory");
-    assert.equal(retryClient.diffCalls, 2);
-
-    const cappedClient = new FakeLayerClient();
-    await cappedClient.uploadFSLayerFile("layer-1", "/workspace/one", Buffer.from("1"));
-    await cappedClient.uploadFSLayerFile("layer-1", "/workspace/two", Buffer.from("2"));
-    const cappedFileSystem = createFileSystem(cappedClient, { maxLayerEntries: 1 });
-    assertErrorCode(await cappedFileSystem.listDir("."), "not_supported");
-  });
-
-  it("bounds LayerFS view assembly time", async () => {
-    const client = new FakeLayerClient();
-    client.getFSLayer = async () => await new Promise<never>(() => {});
-    const fileSystem = createFileSystem(client, { viewTimeoutMs: 5 });
-    assertErrorCode(await fileSystem.fileInfo("."), "unknown");
-  });
-
-  it("creates SDK-backed directories and temporary objects, then cleans owned objects", async () => {
-    const client = new FakeLayerClient();
+  it("creates and cleans only adapter-owned temporary paths", async () => {
+    const client = new FakeClient();
+    client.addFile("/workspace/keep.txt", "keep");
     const fileSystem = createFileSystem(client);
 
-    getOrThrow(await fileSystem.createDir("generated/nested"));
-    assert.equal(getOrThrow(await fileSystem.fileInfo("generated/nested")).kind, "directory");
-    const temporaryFile = getOrThrow(await fileSystem.createTempFile({ prefix: "pi-", suffix: ".tmp" }));
-    assert.equal(getOrThrow(await fileSystem.exists(temporaryFile)), true);
+    const temporaryDirectory = getOrThrow(await fileSystem.createTempDir("run-"));
+    const temporaryFile = getOrThrow(await fileSystem.createTempFile({ prefix: "out-", suffix: ".log" }));
+    getOrThrow(await fileSystem.writeFile(posix.join(temporaryDirectory, "nested.txt"), "nested"));
+
     await fileSystem.cleanup();
-    assert.equal(getOrThrow(await fileSystem.exists(temporaryFile)), false);
-    assertErrorCode(await fileSystem.createTempDir("../escape"), "invalid");
+    assert.equal(client.nodes.has(temporaryDirectory), false);
+    assert.equal(client.nodes.has(temporaryFile), false);
+    assert.equal(client.nodes.has("/workspace/keep.txt"), true);
   });
 
-  it("maps aborts and backend failures to FileError results without rejection", async () => {
-    const client = new FakeLayerClient();
+  it("maps aborts, real SDK not-found messages, and backend failures to FileError results", async () => {
+    const client = new FakeClient();
     const fileSystem = createFileSystem(client);
     const controller = new AbortController();
     controller.abort();
-    assertErrorCode(await fileSystem.readTextFile("file.txt", controller.signal), "aborted");
 
-    client.failGet = new StatusError(403, "denied");
+    const before = client.callCount;
+    assertErrorCode(await fileSystem.writeFile("aborted", "x", controller.signal), "aborted");
+    assert.equal(client.callCount, before);
+    assert.equal(getOrThrow(await fileSystem.exists("missing")), false);
+
+    client.failNext = new StatusError(403, "denied");
     assertErrorCode(await fileSystem.fileInfo("."), "permission_denied");
+    client.failNext = new Error("network unavailable");
+    assertErrorCode(await fileSystem.listDir("."), "unknown");
   });
 });
