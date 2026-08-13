@@ -3,14 +3,12 @@ import type {
   AfterToolCallResult,
   AgentTool,
   AgentToolResult,
-  ExecutionEnv,
 } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { deriveResultId } from "./result-id.js";
 import {
   ResultStoreError,
   type ResultStat,
-  type ResultWriter,
   type ToolResultIdentity,
   type ToolResultStore,
   type WorkspaceRevision,
@@ -19,9 +17,6 @@ import type { WorkspaceRevisionProvider } from "./workspace-revision.js";
 
 const MEDIA_TYPE = "text/plain; charset=utf-8" as const;
 const MAX_CHUNK_BYTES = 64 * 1024;
-const DEFAULT_PENDING_BYTES = 256 * 1024;
-const MIN_PENDING_BYTES = MAX_CHUNK_BYTES;
-const MAX_PENDING_BYTES = 16 * 1024 * 1024;
 const DEFAULT_PREVIEW_BYTES = 8 * 1024;
 const MAX_PREVIEW_BYTES = 8 * 1024;
 const FALLBACK_THRESHOLD_BYTES = 50 * 1024;
@@ -54,18 +49,6 @@ export interface CompactToolResultDetails {
   workspaceAfter?: WorkspaceRevision;
 }
 
-export interface Drive9ExecToolOptions {
-  env: ExecutionEnv;
-  store: ToolResultStore;
-  allocateIdentity: ToolResultIdentityAllocator;
-  workspaceRevisionProvider?: WorkspaceRevisionProvider;
-  commandEnvironment?: Record<string, string>;
-  inheritEnvironment?: boolean;
-  maxPendingBytes?: number;
-  previewBytes?: number;
-  maxAttemptAllocations?: number;
-}
-
 export interface AfterToolCallFallbackOptions {
   store: ToolResultStore;
   allocateIdentity: ToolResultIdentityAllocator;
@@ -78,14 +61,6 @@ export interface ResultToolOptions {
   store: ToolResultStore;
   currentSessionId: () => string;
 }
-
-const drive9ExecParameters = Type.Object(
-  {
-    command: Type.String({ minLength: 1, maxLength: 1024 * 1024 }),
-    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86_400 })),
-  },
-  { additionalProperties: false },
-);
 
 const resultReadParameters = Type.Object(
   {
@@ -253,187 +228,6 @@ async function compactResult(
     throw new ResultStoreError("limit_exceeded", "compact result exceeds the preview limit");
   }
   return { content: [{ type: "text", text }], details };
-}
-
-async function beginDrive9Exec(
-  options: Drive9ExecToolOptions,
-  toolCallId: string,
-  workspaceBefore: WorkspaceRevision | undefined,
-  maxAttemptAllocations: number,
-): Promise<{ identity: ToolResultIdentity; writer: ResultWriter } | { terminal: ResultStat }> {
-  let previous: ToolResultIdentity | undefined;
-  for (let allocation = 0; allocation < maxAttemptAllocations; allocation += 1) {
-    const request: ToolResultIdentityRequest = {
-      toolCallId,
-      toolName: "drive9_exec",
-      ...(previous === undefined ? {} : { previous }),
-    };
-    const identity = await allocateIdentity(options.allocateIdentity, request);
-    const begun = await options.store.begin({
-      identity,
-      toolName: "drive9_exec",
-      mediaType: MEDIA_TYPE,
-      ...(workspaceBefore === undefined ? {} : { workspaceBefore }),
-    });
-    if (begun.kind === "terminal") return { terminal: begun.stat };
-    if (begun.disposition === "created") return { identity, writer: begun.writer };
-    await options.store.recover(begun.writer.resultId, {
-      identity,
-      action: "mark_unknown",
-      reason: "pre-existing drive9_exec attempt may already have spawned",
-    });
-    previous = identity;
-  }
-  throw new ResultStoreError("limit_exceeded", "drive9_exec exhausted identity allocation retries");
-}
-
-async function committedChunkCount(store: ToolResultStore, resultId: string, fallback: number): Promise<number> {
-  try {
-    const stat = await store.stat(resultId);
-    return stat.chunkCount;
-  } catch {
-    return fallback;
-  }
-}
-
-export function createDrive9ExecTool(options: Drive9ExecToolOptions): AgentTool<typeof drive9ExecParameters, CompactToolResultDetails> {
-  if (options.inheritEnvironment === true) {
-    throw new ResultStoreError("invalid", "drive9_exec cannot inherit the ambient host environment");
-  }
-  const maxPendingBytes = configuredInteger(
-    options.maxPendingBytes,
-    DEFAULT_PENDING_BYTES,
-    MIN_PENDING_BYTES,
-    MAX_PENDING_BYTES,
-    "maxPendingBytes",
-  );
-  const previewBytes = configuredInteger(
-    options.previewBytes,
-    DEFAULT_PREVIEW_BYTES,
-    1,
-    MAX_PREVIEW_BYTES,
-    "previewBytes",
-  );
-  const maxAttemptAllocations = configuredInteger(
-    options.maxAttemptAllocations,
-    8,
-    1,
-    64,
-    "maxAttemptAllocations",
-  );
-  return {
-    name: "drive9_exec",
-    label: "Drive9 Exec",
-    description: "Run a command in the Drive9 workspace and persist complete stdout/stderr as durable evidence.",
-    parameters: drive9ExecParameters,
-    executionMode: "sequential",
-    execute: async (toolCallId, params, signal) => {
-      const workspaceBefore = await options.workspaceRevisionProvider?.capture(signal);
-      const begun = await beginDrive9Exec(options, toolCallId, workspaceBefore, maxAttemptAllocations);
-      if ("terminal" in begun) return await compactResult(options.store, begun.terminal, previewBytes);
-
-      const internalAbort = new AbortController();
-      const execSignal = signal === undefined ? internalAbort.signal : AbortSignal.any([signal, internalAbort.signal]);
-      let pendingBytes = 0;
-      let reservedSeq = 0;
-      let committedCount = 0;
-      let acceptingOutput = true;
-      let streamFailure: Error | undefined;
-      let writeTail = Promise.resolve();
-
-      const receive = (stream: "stdout" | "stderr", value: string): void => {
-        if (!acceptingOutput || streamFailure !== undefined) return;
-        try {
-          for (const data of splitUtf8(value)) {
-            if (pendingBytes + data.byteLength > maxPendingBytes) {
-              streamFailure = new ResultStoreError("limit_exceeded", "drive9_exec pending evidence exceeded its bound");
-              internalAbort.abort();
-              return;
-            }
-            const seq = reservedSeq;
-            reservedSeq += 1;
-            pendingBytes += data.byteLength;
-            writeTail = writeTail.then(async () => {
-              try {
-                if (streamFailure === undefined) {
-                  await begun.writer.append({ seq, stream, data });
-                  committedCount = seq + 1;
-                }
-              } catch (error) {
-                streamFailure ??= errorValue(error);
-                internalAbort.abort();
-              } finally {
-                pendingBytes -= data.byteLength;
-              }
-            });
-          }
-        } catch (error) {
-          streamFailure = errorValue(error);
-          internalAbort.abort();
-        }
-      };
-
-      let execution;
-      try {
-        execution = await options.env.exec(params.command, {
-          ...(params.timeoutSeconds === undefined ? {} : { timeout: params.timeoutSeconds }),
-          ...(options.commandEnvironment === undefined ? {} : { env: options.commandEnvironment }),
-          inheritEnv: options.inheritEnvironment ?? false,
-          abortSignal: execSignal,
-          onStdout: (chunk) => receive("stdout", chunk),
-          onStderr: (chunk) => receive("stderr", chunk),
-        });
-      } catch (error) {
-        streamFailure ??= errorValue(error);
-        internalAbort.abort();
-        execution = undefined;
-      }
-      acceptingOutput = false;
-      await writeTail;
-
-      let state: "completed" | "failed" | "aborted" | "unknown";
-      let exitCode: number | undefined;
-      let terminalError: { code: string; message: string } | undefined;
-      if (streamFailure !== undefined) {
-        state = "aborted";
-        terminalError = { code: "result_stream_failed", message: boundedMessage(streamFailure.message) };
-      } else if (execution === undefined) {
-        state = "unknown";
-        terminalError = { code: "execution_unknown", message: "execution environment rejected unexpectedly" };
-      } else if (execution.ok) {
-        exitCode = execution.value.exitCode;
-        state = exitCode === 0 ? "completed" : "failed";
-        if (state === "failed") terminalError = { code: "nonzero_exit", message: `command exited with ${exitCode}` };
-      } else {
-        state = execution.error.code === "aborted" || execution.error.code === "timeout" ? "aborted" : "failed";
-        terminalError = { code: execution.error.code, message: boundedMessage(execution.error.message) };
-      }
-
-      let workspaceAfter: WorkspaceRevision | undefined;
-      if (options.workspaceRevisionProvider !== undefined) {
-        try {
-          workspaceAfter = await options.workspaceRevisionProvider.capture();
-        } catch (error) {
-          terminalError = { code: "workspace_capture_failed", message: boundedMessage(errorValue(error).message) };
-        }
-      }
-
-      const chunkCount = await committedChunkCount(options.store, begun.writer.resultId, committedCount);
-      let terminal: ResultStat;
-      try {
-        terminal = await begun.writer.finalize({
-          state,
-          chunkCount,
-          ...(exitCode === undefined ? {} : { exitCode }),
-          ...(terminalError === undefined ? {} : { error: terminalError }),
-          ...(workspaceAfter === undefined ? {} : { workspaceAfter }),
-        });
-      } catch (error) {
-        throw new ResultStoreError("unavailable", "drive9_exec could not finalize durable evidence", errorValue(error));
-      }
-      return await compactResult(options.store, terminal, previewBytes);
-    },
-  };
 }
 
 export function createAfterToolCallFallback(

@@ -15,7 +15,6 @@ export interface EvidenceProbeClient {
 
 export interface EvidenceIsolationOptions {
   workspaceRemoteRoot: string;
-  workspaceMountRemoteRoot: string;
   evidenceRemoteRoot: string;
   workspaceClient: EvidenceProbeClient;
   evidenceClient: EvidenceProbeClient;
@@ -77,11 +76,7 @@ async function ensureProbeDirectory(client: EvidenceProbeClient, path: string): 
 
 export async function verifyEvidenceIsolation(options: EvidenceIsolationOptions): Promise<EvidenceIsolationReceipt> {
   const workspaceRoot = normalizeRemoteRoot(options.workspaceRemoteRoot, "workspaceRemoteRoot");
-  const mountRoot = normalizeRemoteRoot(options.workspaceMountRemoteRoot, "workspaceMountRemoteRoot");
   const evidenceRoot = normalizeRemoteRoot(options.evidenceRemoteRoot, "evidenceRemoteRoot");
-  if (workspaceRoot !== mountRoot) {
-    throw new ResultStoreError("invalid", "workspace mount root does not match the configured workspace remote root");
-  }
   if (containsPath(workspaceRoot, evidenceRoot) || containsPath(evidenceRoot, workspaceRoot)) {
     throw new ResultStoreError("invalid", "workspace and evidence roots must be disjoint");
   }

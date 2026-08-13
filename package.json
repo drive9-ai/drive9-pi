@@ -1,7 +1,7 @@
 {
   "name": "@drive9-ai/drive9-pi",
   "version": "0.1.0",
-  "description": "Drive9 execution and evidence adapters for Pi",
+  "description": "Drive9 SDK filesystem and evidence adapters for Pi",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,7 +17,8 @@
     "docs/design-lock.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "check:e2e": "tsc --noEmit -p tsconfig.e2e.json",
     "demo:drive9": "tsx e2e/pi-drive9-demo.ts",

@@ -1,4 +1,11 @@
-export { Drive9ExecutionEnv, type Drive9ExecutionEnvOptions } from "./drive9-execution-env.js";
+export { composeExecutionEnv, type ComposeExecutionEnvOptions } from "./compose-execution-env.js";
+export {
+  Drive9FileSystem,
+  type Drive9BaseFileInfo,
+  type Drive9BaseStat,
+  type Drive9FileSystemOptions,
+  type Drive9LayerFileSystemClient,
+} from "./drive9-file-system.js";
 export {
   createDrive9ResultStore,
   Drive9ResultStoreBackend,
@@ -14,12 +21,10 @@ export {
 } from "./evidence-isolation.js";
 export {
   createAfterToolCallFallback,
-  createDrive9ExecTool,
   createResultReadTool,
   createResultSearchTool,
   type AfterToolCallFallbackOptions,
   type CompactToolResultDetails,
-  type Drive9ExecToolOptions,
   type ResultToolOptions,
   type ToolResultIdentityAllocator,
   type ToolResultIdentityRequest,
@@ -52,10 +57,8 @@ export {
   type WorkspaceRevision,
 } from "./tool-result-types.js";
 export {
-  createDrive9MountDrain,
   Drive9LayerWorkspaceRevisionProvider,
   type Drive9CheckpointClient,
   type Drive9LayerWorkspaceRevisionProviderOptions,
-  type Drive9MountDrainOptions,
   type WorkspaceRevisionProvider,
 } from "./workspace-revision.js";

@@ -61,7 +61,6 @@ describe("verifyEvidenceIsolation", () => {
   it("proves evidence authority while the workspace authority is denied", async () => {
     const receipt = await verifyEvidenceIsolation({
       workspaceRemoteRoot: "/workspaces/run",
-      workspaceMountRemoteRoot: "/workspaces/run",
       evidenceRemoteRoot: "/evidence/run",
       workspaceClient: new ProbeClient(true),
       evidenceClient: new ProbeClient(),
@@ -81,25 +80,13 @@ describe("verifyEvidenceIsolation", () => {
     assert.ok(Number.isFinite(Date.parse(receipt.verifiedAt)));
   });
 
-  it("rejects overlapping roots and a mount identity mismatch before probing", async () => {
+  it("rejects overlapping roots before probing", async () => {
     const evidenceClient = new ProbeClient();
     await assert.rejects(
       async () =>
         await verifyEvidenceIsolation({
           workspaceRemoteRoot: "/workspaces/run",
-          workspaceMountRemoteRoot: "/workspaces/run",
           evidenceRemoteRoot: "/workspaces/run/evidence",
-          workspaceClient: new ProbeClient(true),
-          evidenceClient,
-        }),
-      (error: unknown) => error instanceof ResultStoreError && error.code === "invalid",
-    );
-    await assert.rejects(
-      async () =>
-        await verifyEvidenceIsolation({
-          workspaceRemoteRoot: "/workspaces/run",
-          workspaceMountRemoteRoot: "/workspaces/other",
-          evidenceRemoteRoot: "/evidence/run",
           workspaceClient: new ProbeClient(true),
           evidenceClient,
         }),
@@ -114,7 +101,6 @@ describe("verifyEvidenceIsolation", () => {
       async () =>
         await verifyEvidenceIsolation({
           workspaceRemoteRoot: "/workspaces/run",
-          workspaceMountRemoteRoot: "/workspaces/run",
           evidenceRemoteRoot: "/evidence/run",
           workspaceClient: shared,
           evidenceClient: shared,
@@ -133,7 +119,6 @@ describe("verifyEvidenceIsolation", () => {
       async () =>
         await verifyEvidenceIsolation({
           workspaceRemoteRoot: "/workspaces/run",
-          workspaceMountRemoteRoot: "/workspaces/run",
           evidenceRemoteRoot: "/evidence/run",
           workspaceClient: missingClient,
           evidenceClient: new ProbeClient(),

@@ -96,7 +96,7 @@ const workspaceAfter = {
 function beginInput(overrides?: Partial<BeginResultInput>): BeginResultInput {
   return {
     identity,
-    toolName: "drive9_exec",
+    toolName: "fixture_tool",
     mediaType: "text/plain; charset=utf-8",
     workspaceBefore,
     ...overrides,
