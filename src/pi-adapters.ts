@@ -22,6 +22,7 @@ const MAX_MODEL_RESULT_BYTES = 64 * 1024;
 const MAX_RESULT_READ_TEXT_BYTES = 56 * 1024;
 const RESULT_ID_PATTERN = "^r1_[0-9a-f]{64}$";
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const EVIDENCE_READER_TOOL_NAMES = new Set(["result_read", "result_search"]);
 
 export interface ToolResultIdentityRequest {
   toolCallId: string;
@@ -233,6 +234,7 @@ export function createAfterToolCallFallback(
     "previewBytes",
   );
   return async (context, _signal) => {
+    if (EVIDENCE_READER_TOOL_NAMES.has(context.toolCall.name)) return undefined;
     if (!context.result.content.every((part) => part.type === "text")) return undefined;
     const text = context.result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
     if (Buffer.byteLength(text, "utf8") <= thresholdBytes) return undefined;

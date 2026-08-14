@@ -28,6 +28,12 @@ export {
   type ToolResultIdentityAllocator,
   type ToolResultIdentityRequest,
 } from "./pi-adapters.js";
+export {
+  chainAfterToolCall,
+  createDrive9PiIntegration,
+  type Drive9PiIntegration,
+  type Drive9PiIntegrationOptions,
+} from "./pi-integration.js";
 export { deriveResultId, encodeResultIdentity } from "./result-id.js";
 export { PersistentToolResultStore } from "./tool-result-store.js";
 export {

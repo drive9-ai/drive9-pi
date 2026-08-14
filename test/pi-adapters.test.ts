@@ -73,10 +73,10 @@ async function persistText(
   return (await begun.writer.finalize({ state, chunkCount: 1 })).resultId;
 }
 
-function fallbackContext(text: string, isError = false): AfterToolCallContext {
+function fallbackContext(text: string, isError = false, toolName = "fixture"): AfterToolCallContext {
   return {
     assistantMessage: {} as AfterToolCallContext["assistantMessage"],
-    toolCall: { type: "toolCall", id: "call-1", name: "fixture", arguments: {} },
+    toolCall: { type: "toolCall", id: "call-1", name: toolName, arguments: {} },
     args: {},
     result: { content: [{ type: "text", text }], details: { original: true } },
     isError,
@@ -116,6 +116,23 @@ describe("Pi durable result adapters", () => {
     const result = await fallback(fallbackContext("failed tool output", true));
     const details = result?.details as { state: string };
     assert.equal(details.state, "failed");
+  });
+
+  it("does not recursively offload bounded evidence-reader results", async () => {
+    const store = new PersistentToolResultStore({ backend: new MemoryBackend() });
+    let allocations = 0;
+    const fallback = createAfterToolCallFallback({
+      store,
+      thresholdBytes: 1,
+      allocateIdentity: () => {
+        allocations += 1;
+        return identity(0);
+      },
+    });
+
+    assert.equal(await fallback(fallbackContext("search result", false, "result_search")), undefined);
+    assert.equal(await fallback(fallbackContext("read result", false, "result_read")), undefined);
+    assert.equal(allocations, 0);
   });
 
   it("keeps result_read and result_search bounded and rejects cross-session access", async () => {

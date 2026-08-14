@@ -4,6 +4,8 @@ import * as packageExports from "../src/index.js";
 
 describe("public package contract", () => {
   it("exports SDK filesystem and evidence capabilities without an execution implementation", () => {
+    assert.equal(typeof packageExports.createDrive9PiIntegration, "function");
+    assert.equal(typeof packageExports.chainAfterToolCall, "function");
     assert.equal(typeof packageExports.Drive9FileSystem, "function");
     assert.equal(typeof packageExports.PersistentToolResultStore, "function");
     assert.equal("Drive9ExecutionEnv" in packageExports, false);

@@ -8,8 +8,13 @@ Drive9 provides two capabilities to Pi:
 2. a durable tool-result evidence store.
 
 Drive9 does not provide compute, a shell, a sandbox, a process runner, FUSE,
-or a Pi `ExecutionEnv` compositor. The application owns execution and composes
-its own Pi environment.
+or a general-purpose `ExecutionEnv` compositor. `createDrive9PiIntegration`
+binds Pi's read/write/edit/list tools to a private file-only environment, installs
+the evidence tools and fallback, and returns complete `AgentOptions` through
+`withAgentOptions`. Its environment rejects `exec` unless the caller supplies
+a `Shell`; explicit additional Pi harness tools can then use only that shell.
+The package never creates or falls back to a host shell. The application
+continues to own execution.
 
 V1 deliberately does not use LayerFS. `Drive9FileSystem` mutates the live
 Drive9 filesystem through ordinary SDK methods and does not expose a `layerId`,
@@ -64,7 +69,9 @@ stable result reference is published to the model.
 
 The package exposes bounded `result_read` and `result_search` tools plus an
 `afterToolCall` fallback for oversized text results. It does not expose a
-command-execution tool or capture a LayerFS checkpoint.
+command-execution tool or capture a LayerFS checkpoint. The fallback excludes
+`result_read` and `result_search` so evidence retrieval cannot recursively
+produce another evidence reference.
 
 `afterToolCall` runs after a tool has materialized its result; it is a safety
 fallback, not an unbounded streaming writer. Callers with streaming output
@@ -81,12 +88,30 @@ must append chunks through `ToolResultStore` before publishing the reference.
 - Cleanup is best-effort and removes only temporary paths created by the
   adapter instance.
 
-## 5. Acceptance Gates
+## 5. Pi Integration Preset
+
+`createDrive9PiIntegration` is the default customer entrypoint. It:
+
+- constructs the workspace filesystem and evidence store;
+- binds Pi's built-in `read`, `write`, and `edit` tools plus a direct-child
+  `list` tool to Drive9;
+- installs `result_read` and `result_search` in the same session scope;
+- installs the oversized-result fallback after any existing application hook;
+- rejects duplicate tool names and a conflicting Agent session ID;
+- registers no `exec` or `bash` tool by default and never uses a host shell;
+- optionally binds explicit caller-selected harness tools to a caller-supplied
+  `Shell`, with Drive9 as their filesystem view.
+
+The lower-level filesystem, store, and adapter factories remain available for
+applications that need custom composition.
+
+## 6. Acceptance Gates
 
 A releasable head must prove:
 
-1. the public package exports no Drive9-owned exec tool, execution class,
-   `composeExecutionEnv`, or LayerFS workspace provider;
+1. the public package exports a one-call Pi integration preset but no
+   Drive9-owned exec tool, public execution class, `composeExecutionEnv`, or
+   LayerFS workspace provider;
 2. `Drive9FileSystem` uses only ordinary Drive9 SDK filesystem operations and
    imports no local filesystem, host execution, or LayerFS API;
 3. path escape and root mutation fail before backend side effects;
@@ -96,5 +121,10 @@ A releasable head must prove:
    directories, and symlinks map to explicit Pi results;
 6. evidence isolation, CAS finalization, crash recovery, and bounded reads
    remain covered;
-7. README and demo describe live SDK filesystem mutation without claiming
-   shell execution, branch, checkpoint, or rollback semantics.
+7. a real Pi `Agent` loop proves model-issued read/write/edit/list calls reach the
+   Drive9 filesystem and oversized output is retrieved with the evidence tools;
+8. the preset composes existing tools and `afterToolCall` hooks, rejects
+   ambiguous duplicates/session scope, installs no shell tool by default, and
+   delegates explicit harness tools only to a supplied shell;
+9. README and demo lead with the one-call integration without claiming shell
+   execution, branch, checkpoint, or rollback semantics.

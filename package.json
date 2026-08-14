@@ -1,7 +1,7 @@
 {
   "name": "@drive9-ai/drive9-pi",
   "version": "0.1.0",
-  "description": "Drive9 SDK filesystem and evidence adapters for Pi",
+  "description": "Turnkey Drive9 filesystem and durable evidence integration for Pi",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
