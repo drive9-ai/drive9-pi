@@ -1,7 +1,7 @@
 {
   "name": "@drive9-ai/drive9-pi",
   "version": "0.1.0",
-  "description": "Drive9 execution and evidence adapters for Pi",
+  "description": "Turnkey Drive9 filesystem and durable evidence integration for Pi",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,8 +17,11 @@
     "docs/design-lock.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
+    "check:e2e": "tsc --noEmit -p tsconfig.e2e.json",
+    "demo:drive9": "tsx e2e/pi-drive9-demo.ts",
     "test": "tsx --test test/*.test.ts",
     "prepack": "npm run build"
   },
@@ -26,9 +29,12 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.84.1"
+    "@earendil-works/pi-agent-core": "0.84.1",
+    "drive9": "0.1.4",
+    "typebox": "1.3.7"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.1",
     "@types/node": "24.12.4",
     "tsx": "4.22.1",
     "typescript": "5.9.3"

@@ -7,18 +7,10 @@ export interface ToolResultIdentity {
   attempt: number;
 }
 
-export interface WorkspaceRevision {
-  layerId: string;
-  durableSeq: number;
-  snapshotId?: string;
-  capturedAt: string;
-}
-
 export interface BeginResultInput {
   identity: ToolResultIdentity;
   toolName: string;
   mediaType: "text/plain; charset=utf-8";
-  workspaceBefore?: WorkspaceRevision;
 }
 
 export interface AppendInput {
@@ -32,7 +24,6 @@ export interface FinalizeInput {
   chunkCount: number;
   exitCode?: number;
   error?: { code: string; message: string };
-  workspaceAfter?: WorkspaceRevision;
 }
 
 export interface ResultStat {
@@ -48,8 +39,6 @@ export interface ResultStat {
   sha256?: string;
   exitCode?: number;
   error?: { code: string; message: string };
-  workspaceBefore?: WorkspaceRevision;
-  workspaceAfter?: WorkspaceRevision;
   manifestRevision: number;
 }
 
@@ -92,8 +81,6 @@ export interface ReadPage {
   startLine: number;
   endLine: number;
   nextCursor?: string;
-  workspaceBefore?: WorkspaceRevision;
-  workspaceAfter?: WorkspaceRevision;
 }
 
 export interface BytePage {
@@ -104,8 +91,6 @@ export interface BytePage {
   startByte: number;
   endByte: number;
   nextOffset?: number;
-  workspaceBefore?: WorkspaceRevision;
-  workspaceAfter?: WorkspaceRevision;
 }
 
 export interface SearchInput {
@@ -130,8 +115,6 @@ export interface SearchPage {
   matches: SearchMatch[];
   scannedBytes: number;
   nextCursor?: string;
-  workspaceBefore?: WorkspaceRevision;
-  workspaceAfter?: WorkspaceRevision;
 }
 
 export interface RecoverInput {
