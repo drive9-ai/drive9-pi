@@ -30,7 +30,9 @@ export {
 } from "./pi-adapters.js";
 export {
   chainAfterToolCall,
+  createDrive9FileTools,
   createDrive9PiIntegration,
+  type CreateDrive9FileToolsOptions,
   type Drive9PiIntegration,
   type Drive9PiIntegrationOptions,
 } from "./pi-integration.js";

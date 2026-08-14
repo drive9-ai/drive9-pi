@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
+import { normalizeDrive9AbsoluteRoot } from "./drive9-path.js";
 import { ResultStoreError } from "./tool-result-types.js";
 
 export interface EvidenceProbeClient {
@@ -31,18 +32,7 @@ export interface EvidenceIsolationReceipt {
 }
 
 function normalizeRemoteRoot(value: string, label: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.includes("\0") ||
-    value.includes("\\") ||
-    !posix.isAbsolute(value)
-  ) {
-    throw new ResultStoreError("invalid", `${label} must be an absolute POSIX path`);
-  }
-  const normalized = posix.normalize(value);
-  if (normalized === "/") throw new ResultStoreError("invalid", `${label} cannot be the tenant root`);
-  return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  return normalizeDrive9AbsoluteRoot(value, label, (message) => new ResultStoreError("invalid", message));
 }
 
 function containsPath(parent: string, child: string): boolean {

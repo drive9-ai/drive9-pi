@@ -35,7 +35,7 @@ backend call. Expected and unexpected backend failures are returned as
 
 | Pi capability | Drive9 SDK primitive | Required behavior |
 | --- | --- | --- |
-| read text/binary | `stat`, `read` | reject directories and unsupported symlink reads |
+| read text/binary | `stat`, `read`, `readStream` | reject directories and unsupported symlink reads; stop bounded line reads early |
 | write | `write` | create missing parent directories; reject root and symlink overwrite |
 | append | `append` | create missing parent directories; preserve SDK append concurrency contract |
 | file info | `stat` | return addressed path, kind, size, and modification time |
@@ -43,7 +43,7 @@ backend call. Expected and unexpected backend failures are returned as
 | rename | `rename` | use the server atomic rename operation; never copy-plus-delete |
 | mkdir | `stat`, `mkdir` | recursive parent-first creation; existing directory is success |
 | remove | `deleteFile`, `deleteDir`, `removeAll` | support force, non-recursive empty-directory checks, and recursive removal |
-| temp file/dir | ordinary write/mkdir/delete APIs | allocate under `tempRoot`; cleanup only adapter-owned paths |
+| temp file/dir | `createFile`, `mkdir`, delete APIs | allocate exclusively under `tempRoot`; retain failed cleanup for retry |
 | canonical path | `stat` | return normalized non-symlink path; symlink resolution is unsupported |
 
 Mutations issued through one adapter instance are serialized. This avoids
@@ -52,6 +52,9 @@ workspace snapshot.
 
 The configured root itself cannot be overwritten, renamed, or removed.
 Cross-root path traversal is rejected before any SDK call.
+Paths are normalized to Drive9's NFC namespace before containment and canonical
+identity checks. Characters that the locked Drive9 SDK cannot safely preserve
+through URL construction fail closed before a client method is called.
 
 ### 2.2 Explicit Non-Goals
 
@@ -82,6 +85,9 @@ must append chunks through `ToolResultStore` before publishing the reference.
 - No built-in shell, host environment inheritance, or implicit local process.
 - No FUSE, WebDAV, LayerFS, or mount requirement for filesystem operations.
 - Path escape is rejected before a client method is called.
+- URL delimiters, percent escapes, controls, malformed Unicode, and backslashes
+  that could change the locked SDK's request target are rejected consistently
+  for workspace, evidence-store, and evidence-isolation paths.
 - Workspace and evidence roots must be disjoint.
 - A missing object is not accepted as proof of authorization denial.
 - Backend exceptions map to stable `FileError` or `ResultStoreError` codes.

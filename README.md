@@ -42,7 +42,11 @@ const drive9 = createDrive9PiIntegration({
 const agent = new Agent(
   drive9.withAgentOptions({
     streamFn,
-    initialState: { model, tools: applicationTools },
+    initialState: {
+      model,
+      systemPrompt: "Use only read, write, edit, and list in the workspace.",
+      tools: applicationTools,
+    },
     afterToolCall: applicationAfterToolCall,
   }),
 );
@@ -55,6 +59,8 @@ duplicate tool names and session mismatches fail during setup. No `exec` or
 may supply their sandbox `Shell` plus explicit Pi harness tools; those tools are
 bound to the Drive9 filesystem and only that supplied shell. Without a shell,
 `executionEnv.exec` fails with `shell_unavailable` and never reaches the host.
+The system prompt is only model guidance: `withAgentOptions` performs the actual
+filesystem injection by adding Drive9-bound tools to `initialState.tools`.
 
 ## Advanced Filesystem API
 
@@ -64,7 +70,8 @@ It does not require a mount or a LayerFS layer.
 
 ```ts
 import { Client } from "drive9";
-import { Drive9FileSystem } from "@drive9-ai/drive9-pi";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { createDrive9FileTools, Drive9FileSystem } from "@drive9-ai/drive9-pi";
 
 const client = Client.defaultClient();
 const fs = new Drive9FileSystem({
@@ -75,12 +82,29 @@ const fs = new Drive9FileSystem({
 await fs.writeFile("src/auth.ts", "export const enabled = true;\n");
 await fs.appendFile("logs/run.txt", "step completed\n");
 const source = await fs.readTextFile("src/auth.ts");
+
+const agent = new Agent({
+  streamFn,
+  initialState: {
+    model,
+    systemPrompt: "Use only read, write, edit, and list in the workspace.",
+    tools: createDrive9FileTools({ fileSystem: fs }),
+  },
+});
 ```
 
 The adapter normalizes every path inside `root`, maps backend failures to Pi
 `FileError` results, creates parent directories for writes and appends, and
 serializes mutations issued through one adapter instance. Recursive remove and
-atomic rename use the corresponding Drive9 SDK operations.
+atomic rename use the corresponding Drive9 SDK operations. With the ordinary
+Drive9 `Client`, bounded `readTextLines` reads from `readStream` and cancels as
+soon as the requested number of lines is available. Temporary objects use
+exclusive `createFile`/`mkdir` operations and failed cleanup remains retryable.
+
+Drive9 paths are NFC-normalized before containment checks. Until a Drive9 SDK
+release that safely encodes every URL path segment is available, `%`, `?`, `#`,
+backslashes, ASCII controls, and malformed Unicode are rejected before any SDK
+call. Spaces and well-formed Unicode filenames remain supported.
 
 This default adapter mutates the live Drive9 filesystem. It does not create a
 layer and does not promise branch, checkpoint, or rollback semantics. A future
