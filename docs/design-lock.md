@@ -8,12 +8,18 @@ Drive9 provides two capabilities to Pi:
 2. a durable tool-result evidence store.
 
 Drive9 does not provide compute, a shell, a sandbox, a process runner, FUSE,
-or a general-purpose `ExecutionEnv` compositor. `createDrive9PiIntegration`
-binds Pi's read/write/edit/list tools to a private file-only environment, installs
-the evidence tools and fallback, and returns complete `AgentOptions` through
-`withAgentOptions`. Its environment rejects `exec` unless the caller supplies
-a `Shell`; explicit additional Pi harness tools can then use only that shell.
-The package never creates or falls back to a host shell. The application
+or a general-purpose `ExecutionEnv` compositor. The primary customer entrypoint
+is a standard Pi package extension. It replaces Pi coding-agent filesystem
+operations with Drive9 operations while users keep the ordinary `pi` install
+and startup flow. In Drive9 mode, host process tools fail closed rather than
+operating in a different filesystem world.
+
+`createDrive9PiIntegration` remains a lower-level agent-core preset. It binds
+Pi's harness read/write/edit/list tools to a private file-only environment,
+installs the evidence tools and fallback, and returns complete `AgentOptions`
+through `withAgentOptions`. Its environment rejects `exec` unless the caller
+supplies a `Shell`; explicit additional harness tools can then use only that
+shell. The package never creates or falls back to a host shell. The application
 continues to own execution.
 
 V1 deliberately does not use LayerFS. `Drive9FileSystem` mutates the live
@@ -94,9 +100,24 @@ must append chunks through `ToolResultStore` before publishing the reference.
 - Cleanup is best-effort and removes only temporary paths created by the
   adapter instance.
 
-## 5. Pi Integration Preset
+## 5. Pi Package and Integration Preset
 
-`createDrive9PiIntegration` is the default customer entrypoint. It:
+The package manifest declares a Pi extension and the `pi-package` keyword. The
+extension is inactive without `--drive9-root` or `DRIVE9_PI_ROOT`. When active,
+it uses `Client.defaultClient()` and Pi coding-agent's official tool factories:
+
+- `read`, `write`, and `edit` delegate to Drive9 filesystem operations;
+- Pi's canonical `ls` tool delegates to Drive9 directory operations;
+- the edit call renderer cannot read a same-named local file;
+- model bash/grep/find and interactive user bash fail closed;
+- the system prompt identifies the Drive9 root and storage-only boundary;
+- a missing, invalid, non-directory, or tenant root fails closed and cannot
+  silently resume local filesystem access.
+
+This is the default public usage. It follows Pi's package and remote-operation
+extension pattern instead of requiring users to construct a custom `Agent`.
+
+`createDrive9PiIntegration` is the lower-level agent-core entrypoint. It:
 
 - constructs the workspace filesystem and evidence store;
 - binds Pi's built-in `read`, `write`, and `edit` tools plus a direct-child
@@ -115,9 +136,9 @@ applications that need custom composition.
 
 A releasable head must prove:
 
-1. the public package exports a one-call Pi integration preset but no
-   Drive9-owned exec tool, public execution class, `composeExecutionEnv`, or
-   LayerFS workspace provider;
+1. the package installs through Pi's standard package manifest, uses the
+   official coding-agent filesystem tool factories, and preserves ordinary Pi
+   startup while exporting a lower-level integration preset;
 2. `Drive9FileSystem` uses only ordinary Drive9 SDK filesystem operations and
    imports no local filesystem, host execution, or LayerFS API;
 3. path escape and root mutation fail before backend side effects;
@@ -127,10 +148,12 @@ A releasable head must prove:
    directories, and symlinks map to explicit Pi results;
 6. evidence isolation, CAS finalization, crash recovery, and bounded reads
    remain covered;
-7. a real Pi `Agent` loop proves model-issued read/write/edit/list calls reach the
-   Drive9 filesystem and oversized output is retrieved with the evidence tools;
+7. usage-level tests prove coding-agent read/write/edit/ls calls reach Drive9,
+   remote edit rendering does not touch local files, and process tools cannot
+   fall through to the host;
 8. the preset composes existing tools and `afterToolCall` hooks, rejects
    ambiguous duplicates/session scope, installs no shell tool by default, and
    delegates explicit harness tools only to a supplied shell;
-9. README and demo lead with the one-call integration without claiming shell
-   execution, branch, checkpoint, or rollback semantics.
+9. README leads with `pi install` and `pi --drive9-root`, provides copyable SDK
+   configuration, and does not claim shell execution, branch, checkpoint, or
+   rollback semantics.

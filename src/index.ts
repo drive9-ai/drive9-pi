@@ -36,6 +36,19 @@ export {
   type Drive9PiIntegration,
   type Drive9PiIntegrationOptions,
 } from "./pi-integration.js";
+export {
+  createDrive9CodingAgentOperations,
+  createDrive9CodingAgentTools,
+  createDrive9StorageOnlyBashOperations,
+  DRIVE9_STORAGE_ONLY_MESSAGE,
+  type CreateDrive9CodingAgentToolsOptions,
+  type Drive9CodingAgentTool,
+  type Drive9CodingAgentOperations,
+} from "./pi-coding-agent.js";
+export {
+  createDrive9PiExtension,
+  type Drive9PiExtensionOptions,
+} from "./pi-extension.js";
 export { deriveResultId, encodeResultIdentity } from "./result-id.js";
 export { PersistentToolResultStore } from "./tool-result-store.js";
 export {
