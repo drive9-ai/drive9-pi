@@ -2,6 +2,18 @@
   "name": "@drive9-ai/drive9-pi",
   "version": "0.1.0",
   "description": "Turnkey Drive9 filesystem and durable evidence integration for Pi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drive9-ai/drive9-pi.git"
+  },
+  "homepage": "https://github.com/drive9-ai/drive9-pi#readme",
+  "bugs": {
+    "url": "https://github.com/drive9-ai/drive9-pi/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "keywords": [
     "pi-package",
     "drive9",
@@ -19,8 +31,10 @@
   },
   "files": [
     "dist",
+    "src",
     "README.md",
-    "docs/design-lock.md"
+    "docs/design-lock.md",
+    "schema/drive9.schema.json"
   ],
   "pi": {
     "extensions": [
@@ -34,8 +48,7 @@
     "check:e2e": "tsc --noEmit -p tsconfig.e2e.json",
     "demo:drive9": "tsx e2e/pi-drive9-demo.ts",
     "test": "tsx --test test/*.test.ts",
-    "prepack": "npm run build",
-    "prepare": "npm run build"
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -103,16 +103,39 @@ must append chunks through `ToolResultStore` before publishing the reference.
 ## 5. Pi Package and Integration Preset
 
 The package manifest declares a Pi extension and the `pi-package` keyword. The
-extension is inactive without `--drive9-root` or `DRIVE9_PI_ROOT`. When active,
-it uses `Client.defaultClient()` and Pi coding-agent's official tool factories:
+extension resolves activation in this order: `--no-drive9`, `--drive9-root`,
+`DRIVE9_PI_ROOT`, trusted project configuration, and an explicit programmatic
+default. Project configuration is stored in `.pi/drive9.json`; it is read only
+when Pi reports the project trusted and the project contains the standard
+`.pi/settings.json` trust marker. Interactive `/drive9 setup` preserves an
+existing settings file or creates a minimal marker before atomically writing
+the non-secret Drive9 configuration. When active, the extension uses
+`Client.defaultClient()` and Pi coding-agent's official tool factories:
 
 - `read`, `write`, and `edit` delegate to Drive9 filesystem operations;
 - Pi's canonical `ls` tool delegates to Drive9 directory operations;
 - the edit call renderer cannot read a same-named local file;
-- model bash/grep/find and interactive user bash fail closed;
+- model bash/grep/find fail closed, and the extension's `user_bash` handler
+  refuses interactive shell execution when Pi selects that handler;
 - the system prompt identifies the Drive9 root and storage-only boundary;
 - a missing, invalid, non-directory, or tenant root fails closed and cannot
-  silently resume local filesystem access.
+  silently resume local filesystem access;
+- the effective read/write/edit/ls registrations are verified during activation;
+  a conflicting filesystem extension makes Drive9 unavailable instead of
+  silently routing a standard tool somewhere else;
+- interactive `!` is outside the verifiable model-tool boundary because Pi
+  selects the first `user_bash` interceptor and exposes no effective-owner
+  query. The extension documents this composition limit and never claims that
+  its refusal handler can override an earlier interceptor.
+
+The extension exposes `/drive9 setup`, `/drive9 status`, `/drive9 disable`, and
+`/drive9 verify [write]`, plus `--drive9-root` and `--no-drive9` for one-shot
+use. Its footer distinguishes inactive, checking, active, disabled, and
+unavailable states. When Drive9 is checking or unavailable, standard
+filesystem and process tools are removed from the active tool set and blocked
+at the tool-call boundary. Pi reports lifecycle handler exceptions rather than
+propagating them, so an exception alone is never treated as the safety
+mechanism.
 
 This is the default public usage. It follows Pi's package and remote-operation
 extension pattern instead of requiring users to construct a custom `Agent`.
@@ -154,6 +177,10 @@ A releasable head must prove:
 8. the preset composes existing tools and `afterToolCall` hooks, rejects
    ambiguous duplicates/session scope, installs no shell tool by default, and
    delegates explicit harness tools only to a supplied shell;
-9. README leads with `pi install` and `pi --drive9-root`, provides copyable SDK
-   configuration, and does not claim shell execution, branch, checkpoint, or
-   rollback semantics.
+9. README leads with a currently usable standard `pi install` path, setup and
+   one-shot configuration, provides copyable SDK configuration, and does not
+   claim shell execution, branch, checkpoint, or rollback semantics;
+10. trusted project configuration, command-driven setup/status/disable/verify,
+    footer state, tool ownership conflicts, active-tool selection, headless
+    fail-closed behavior, package build output, and a real Pi Git install have
+    discriminating regression coverage.

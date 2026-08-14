@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check types
+        run: npm run check
+
+      - name: Check examples
+        run: npm run check:e2e
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify committed build output
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain --untracked-files=all -- dist)" ]]; then
+            git status --short --untracked-files=all -- dist
+            exit 1
+          fi
+
+      - name: Inspect npm package
+        run: npm pack --dry-run
+
+      - name: Install package through Pi's Git path
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+        shell: bash
+        run: |
+          smoke_namespace="$RUNNER_TEMP/drive9-ai"
+          smoke_repo="$smoke_namespace/drive9-pi-smoke.git"
+          source_url="git://127.0.0.1:9418/drive9-ai/${smoke_repo##*/}"
+          package_source="git:$source_url"
+
+          mkdir "$smoke_namespace"
+          git clone --bare "$GITHUB_WORKSPACE" "$smoke_repo"
+          git daemon \
+            --reuseaddr \
+            --export-all \
+            --listen=127.0.0.1 \
+            --port=9418 \
+            --base-path="$RUNNER_TEMP" \
+            "$smoke_repo" &
+          daemon_pid=$!
+
+          cleanup() {
+            kill "$daemon_pid" 2>/dev/null || true
+            wait "$daemon_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          daemon_ready=false
+          for _ in {1..20}; do
+            if git ls-remote "$source_url" >/dev/null 2>&1; then
+              daemon_ready=true
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ "$daemon_ready" != true ]]; then
+            echo "Git smoke-test daemon did not become ready" >&2
+            exit 1
+          fi
+
+          npx --yes @earendil-works/pi-coding-agent@0.84.2 \
+            install "$package_source"
+          npx --yes @earendil-works/pi-coding-agent@0.84.2 list
+
+          extension_help="$(npx --yes @earendil-works/pi-coding-agent@0.84.2 --help)"
+          grep -F -- "--drive9-root" <<<"$extension_help"
+          grep -F -- "--no-drive9" <<<"$extension_help"

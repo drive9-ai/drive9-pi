@@ -5,13 +5,22 @@ import { describe, it } from "node:test";
 describe("Pi package manifest", () => {
   it("declares the canonical extension entrypoint and Pi peer dependencies", async () => {
     const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
+      files?: string[];
       keywords?: string[];
       pi?: { extensions?: string[] };
       peerDependencies?: Record<string, string>;
+      publishConfig?: { access?: string; provenance?: boolean };
+      scripts?: Record<string, string>;
     };
 
     assert.ok(packageJson.keywords?.includes("pi-package"));
     assert.deepEqual(packageJson.pi?.extensions, ["./dist/pi-extension.js"]);
+    assert.deepEqual(packageJson.publishConfig, { access: "public", provenance: true });
+    assert.ok(packageJson.files?.includes("dist"));
+    assert.ok(packageJson.files?.includes("src"));
+    assert.ok(packageJson.files?.includes("schema/drive9.schema.json"));
+    assert.equal(packageJson.scripts?.prepare, undefined);
+    assert.equal(packageJson.scripts?.prepack, "npm run build");
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-agent-core"], "*");
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-tui"], "*");

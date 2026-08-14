@@ -1,0 +1,41 @@
+import { type AppendInput, type BeginResult, type BeginResultInput, type BytePage, type FinalizeInput, type PersistentToolResultStoreOptions, type ReadLinesInput, type ReadPage, type ReadRangeInput, type RecoverInput, type ResultStat, type SearchInput, type SearchPage, type ToolResultStore } from "./tool-result-types.js";
+export declare class PersistentToolResultStore implements ToolResultStore {
+    private readonly backend;
+    private readonly pathPrefix;
+    private readonly limits;
+    private readonly resultMutationTails;
+    constructor(options: PersistentToolResultStoreOptions);
+    begin(input: BeginResultInput): Promise<BeginResult>;
+    stat(resultId: string): Promise<ResultStat>;
+    readLines(resultId: string, input: ReadLinesInput): Promise<ReadPage>;
+    readRange(resultId: string, input: ReadRangeInput): Promise<BytePage>;
+    search(resultId: string, input: SearchInput): Promise<SearchPage>;
+    recover(resultId: string, input: RecoverInput): Promise<ResultStat>;
+    private recoverUnlocked;
+    appendChunk(resultId: string, input: AppendInput): Promise<number>;
+    private appendChunkUnlocked;
+    finalizeResult(resultId: string, input: FinalizeInput): Promise<ResultStat>;
+    private finalizeResultUnlocked;
+    private backendCall;
+    private serializeResultMutation;
+    private resultDirectory;
+    private manifestPath;
+    private chunksPrefix;
+    private chunkPath;
+    private readManifest;
+    private readVerifiedChunk;
+    private requireMatchingChunk;
+    private readChunkEnvelope;
+    private emptyAggregate;
+    private aggregateChunks;
+    private aggregateWritingManifest;
+    private writingStat;
+    private terminalForRead;
+    private readPayloadRange;
+    private readPage;
+    private searchPage;
+    private utf8BoundaryAtOrBefore;
+    private lineAtByte;
+    private readContext;
+}
+//# sourceMappingURL=tool-result-store.d.ts.map
