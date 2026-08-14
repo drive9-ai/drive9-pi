@@ -48,6 +48,11 @@ export interface Drive9PiIntegrationOptions {
   harnessTools?: readonly AgentHarnessTool<ExecutionToolContext>[];
 }
 
+export interface CreateDrive9FileToolsOptions {
+  fileSystem: Drive9FileSystem;
+  readTool?: ReadToolOptions;
+}
+
 export interface Drive9PiIntegration {
   fileSystem: Drive9FileSystem;
   resultStore: PersistentToolResultStore;
@@ -136,6 +141,20 @@ function createListTool(env: ExecutionEnv): AgentTool<typeof listParameters, und
   };
 }
 
+function createBoundFileTools(env: ExecutionEnv, readTool?: ReadToolOptions): AgentTool[] {
+  return [
+    bindFileTool(createReadTool(readTool), env),
+    bindFileTool(createWriteTool(), env),
+    bindFileTool(createEditTool(), env),
+    createListTool(env),
+  ];
+}
+
+/** Return Pi file tools already bound to the supplied Drive9 filesystem. */
+export function createDrive9FileTools(options: CreateDrive9FileToolsOptions): AgentTool[] {
+  return createBoundFileTools(new Drive9IntegrationExecutionEnv(options.fileSystem), options.readTool);
+}
+
 function applyAfterToolCallOverride(
   context: AfterToolCallContext,
   override: AfterToolCallResult,
@@ -185,12 +204,7 @@ export function createDrive9PiIntegration(options: Drive9PiIntegrationOptions): 
   const fileSystem = new Drive9FileSystem({ client: options.workspaceClient, root: options.workspaceRoot });
   const resultStore = createDrive9ResultStore({ client: options.evidenceClient, evidenceRoot: options.evidenceRoot });
   const env = new Drive9IntegrationExecutionEnv(fileSystem, options.shell);
-  const fileTools = [
-    bindFileTool(createReadTool(options.readTool), env),
-    bindFileTool(createWriteTool(), env),
-    bindFileTool(createEditTool(), env),
-    createListTool(env),
-  ];
+  const fileTools = createBoundFileTools(env, options.readTool);
   const harnessTools = (options.harnessTools ?? []).map((tool) => bindFileTool(tool, env));
   const resultTools = [
     createResultReadTool({ store: resultStore, currentSessionId: () => sessionId }),

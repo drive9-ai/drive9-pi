@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { posix } from "node:path";
 import { describe, it } from "node:test";
 import { getOrThrow, type Result } from "@earendil-works/pi-agent-core";
+import { Client } from "drive9";
 import {
   Drive9FileSystem,
   type Drive9FileEntry,
@@ -30,6 +32,7 @@ class FakeClient implements Drive9FileSystemClient {
   readonly nodes = new Map<string, Node>();
   readonly calls: Array<{ method: string; paths: string[] }> = [];
   failNext: unknown;
+  createFileConflicts = 0;
   private revision = 1;
 
   constructor(readonly root = "/workspace") {
@@ -65,6 +68,19 @@ class FakeClient implements Drive9FileSystemClient {
     this.record("write", path);
     this.requireDirectory(posix.dirname(path));
     this.nodes.set(path, this.node(data, false, 0o100644));
+  }
+
+  async createFile(path: string): Promise<number> {
+    this.record("createFile", path);
+    this.requireDirectory(posix.dirname(path));
+    if (this.createFileConflicts > 0) {
+      this.createFileConflicts -= 1;
+      throw new StatusError(409, `already exists: ${path}`);
+    }
+    if (this.nodes.has(path)) throw new StatusError(409, `already exists: ${path}`);
+    const node = this.node(new Uint8Array(), false, 0o100600);
+    this.nodes.set(path, node);
+    return node.revision;
   }
 
   async append(path: string, data: Uint8Array): Promise<void> {
@@ -180,6 +196,32 @@ class FakeClient implements Drive9FileSystemClient {
       throw failure;
     }
     this.calls.push({ method, paths });
+  }
+}
+
+class StreamingClient extends FakeClient {
+  chunks: Uint8Array[] = [];
+  holdOpen = false;
+  cancelled = false;
+  readonly streamPaths: string[] = [];
+
+  async readStream(path: string): Promise<ReadableStream<Uint8Array>> {
+    this.streamPaths.push(path);
+    let index = 0;
+    return new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        const chunk = this.chunks[index];
+        if (chunk !== undefined) {
+          index += 1;
+          controller.enqueue(Uint8Array.from(chunk));
+        } else if (!this.holdOpen) {
+          controller.close();
+        }
+      },
+      cancel: () => {
+        this.cancelled = true;
+      },
+    });
   }
 }
 
@@ -300,6 +342,120 @@ describe("Drive9FileSystem", () => {
     assert.equal(client.callCount, before);
   });
 
+  it("rejects URL-ambiguous paths before a real Drive9 Client sends a request", async () => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? "");
+      response.statusCode = 404;
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      assert.ok(address !== null && typeof address === "object");
+      const fileSystem = new Drive9FileSystem({
+        client: new Client(`http://127.0.0.1:${address.port}`, "test-key"),
+        root: "/workspace",
+      });
+      for (const path of [
+        "%2e%2e/secret",
+        "encoded%2fslash",
+        "query?version=1",
+        "fragment#part",
+        "back\\slash",
+        "line\nbreak",
+        "tab\tname",
+        "delete\u007fkey",
+        "unpaired\ud800surrogate",
+      ]) {
+        assertErrorCode(await fileSystem.readTextFile(path), "invalid");
+      }
+      assertErrorCode(await fileSystem.createTempDir("query?prefix"), "invalid");
+      assertErrorCode(await fileSystem.createTempFile({ suffix: "#fragment" }), "invalid");
+      assert.throws(
+        () =>
+          new Drive9FileSystem({
+            client: new Client(`http://127.0.0.1:${address.port}`, "test-key"),
+            root: "/workspace/%2e%2e/private",
+          }),
+        /cannot be safely addressed/,
+      );
+      assert.throws(
+        () =>
+          new Drive9FileSystem({
+            client: new Client(`http://127.0.0.1:${address.port}`, "test-key"),
+            root: "/workspace",
+            tempRoot: "/workspace/temp#fragment",
+          }),
+        /cannot be safely addressed/,
+      );
+      assert.deepEqual(requests, []);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error === undefined ? resolve() : reject(error))),
+      );
+    }
+  });
+
+  it("normalizes Drive9 paths to NFC and validates cwd reassignment", async () => {
+    const root = "/worksp\u00e1ce";
+    const client = new FakeClient(root);
+    client.addFile(`${root}/caf\u00e9.txt`, "normalized");
+    const fileSystem = new Drive9FileSystem({ client, root: "/workspa\u0301ce" });
+
+    assert.equal(fileSystem.root, root);
+    assert.equal(getOrThrow(await fileSystem.readTextFile("cafe\u0301.txt")), "normalized");
+    assert.deepEqual(client.calls.at(-1), { method: "read", paths: [`${root}/caf\u00e9.txt`] });
+
+    fileSystem.cwd = `${root}/re\u0301po`;
+    assert.equal(fileSystem.cwd, `${root}/r\u00e9po`);
+    assert.throws(() => {
+      fileSystem.cwd = "/outside";
+    }, /inside root/);
+    assert.throws(() => {
+      fileSystem.cwd = `${root}/query?value`;
+    }, /cannot be safely addressed/);
+  });
+
+  it("streams bounded UTF-8 lines and cancels once maxLines is reached", async () => {
+    const client = new StreamingClient();
+    const emoji = Buffer.from("😀", "utf8");
+    client.addFile("/workspace/log.txt", "first\r\nsec😀ond\nthird\n");
+    client.chunks = [
+      Buffer.from("first\r", "utf8"),
+      Buffer.concat([Buffer.from("\nsec", "utf8"), emoji.subarray(0, 2)]),
+      Buffer.concat([emoji.subarray(2), Buffer.from("ond\n", "utf8")]),
+      Buffer.from("third\n", "utf8"),
+    ];
+    const fileSystem = createFileSystem(client);
+
+    assert.deepEqual(getOrThrow(await fileSystem.readTextLines("log.txt", { maxLines: 2 })), ["first", "sec😀ond"]);
+    assert.deepEqual(client.streamPaths, ["/workspace/log.txt"]);
+    assert.equal(client.calls.some((call) => call.method === "read"), false);
+    assert.equal(client.cancelled, true);
+  });
+
+  it("cancels an in-flight line stream on abort and rejects invalid streamed UTF-8", async () => {
+    const client = new StreamingClient();
+    client.addFile("/workspace/log.txt", "partial");
+    client.chunks = [Buffer.from("partial", "utf8")];
+    client.holdOpen = true;
+    const fileSystem = createFileSystem(client);
+    const controller = new AbortController();
+    const reading = fileSystem.readTextLines("log.txt", { abortSignal: controller.signal });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    controller.abort();
+    assertErrorCode(await reading, "aborted");
+    assert.equal(client.cancelled, true);
+
+    const invalid = new StreamingClient();
+    invalid.addFile("/workspace/invalid.txt", "placeholder");
+    invalid.chunks = [Uint8Array.of(0xc3), Uint8Array.of(0x28)];
+    invalid.holdOpen = true;
+    assertErrorCode(await createFileSystem(invalid).readTextLines("invalid.txt"), "invalid");
+    assert.equal(invalid.cancelled, true);
+  });
+
   it("creates and cleans only adapter-owned temporary paths", async () => {
     const client = new FakeClient();
     client.addFile("/workspace/keep.txt", "keep");
@@ -313,6 +469,28 @@ describe("Drive9FileSystem", () => {
     assert.equal(client.nodes.has(temporaryDirectory), false);
     assert.equal(client.nodes.has(temporaryFile), false);
     assert.equal(client.nodes.has("/workspace/keep.txt"), true);
+  });
+
+  it("allocates temporary files atomically and retries failed cleanup", async () => {
+    const client = new FakeClient();
+    client.createFileConflicts = 1;
+    const fileSystem = createFileSystem(client);
+    const temporaryFile = getOrThrow(await fileSystem.createTempFile({ prefix: "result-", suffix: ".txt" }));
+    const createCalls = client.calls.filter((call) => call.method === "createFile");
+
+    assert.equal(createCalls.length, 2);
+    assert.notEqual(createCalls[0]?.paths[0], createCalls[1]?.paths[0]);
+    assert.equal(client.calls.some((call) => call.method === "write" && call.paths[0] === temporaryFile), false);
+
+    client.failNext = new Error("temporary network failure");
+    await fileSystem.cleanup();
+    assert.equal(client.nodes.has(temporaryFile), true);
+    await fileSystem.cleanup();
+    assert.equal(client.nodes.has(temporaryFile), false);
+
+    const legacyClient = new FakeClient();
+    Object.defineProperty(legacyClient, "createFile", { value: undefined });
+    assertErrorCode(await createFileSystem(legacyClient).createTempFile(), "not_supported");
   });
 
   it("maps aborts, real SDK not-found messages, and backend failures to FileError results", async () => {

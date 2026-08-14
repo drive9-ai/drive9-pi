@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { normalizeDrive9AbsoluteRoot, normalizeDrive9PathText } from "./drive9-path.js";
 import { PersistentToolResultStore } from "./tool-result-store.js";
 import {
   ResultStoreError,
@@ -54,34 +55,29 @@ function mapDrive9Error(value: unknown): ResultStoreError {
 }
 
 function normalizedAbsoluteRoot(value: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.includes("\0") ||
-    value.includes("\\") ||
-    !posix.isAbsolute(value)
-  ) {
-    throw new ResultStoreError("invalid", "evidenceRoot must be an absolute POSIX path");
-  }
-  const normalized = posix.normalize(value);
-  if (normalized === "/") throw new ResultStoreError("invalid", "evidenceRoot cannot be the tenant root");
-  return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  return normalizeDrive9AbsoluteRoot(
+    value,
+    "evidenceRoot",
+    (message) => new ResultStoreError("invalid", message),
+  );
 }
 
 function normalizedRelativePath(value: string): string {
+  const transportSafe = normalizeDrive9PathText(
+    value,
+    "result object path",
+    false,
+    (message) => new ResultStoreError("invalid", message),
+  );
   if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.includes("\0") ||
-    value.includes("\\") ||
-    posix.isAbsolute(value) ||
-    posix.normalize(value) !== value ||
-    value === "." ||
-    value.startsWith("../")
+    posix.isAbsolute(transportSafe) ||
+    posix.normalize(transportSafe) !== transportSafe ||
+    transportSafe === "." ||
+    transportSafe.startsWith("../")
   ) {
     throw new ResultStoreError("invalid", "result object path must be normalized and relative");
   }
-  return value;
+  return transportSafe;
 }
 
 function positiveInteger(value: number, label: string): number {

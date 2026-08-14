@@ -95,6 +95,34 @@ describe("verifyEvidenceIsolation", () => {
     assert.equal(evidenceClient.objects.size, 0);
   });
 
+  it("normalizes roots before comparison and rejects URL-ambiguous roots before probing", async () => {
+    const evidenceClient = new ProbeClient();
+    await assert.rejects(
+      async () =>
+        await verifyEvidenceIsolation({
+          workspaceRemoteRoot: "/workspa\u0301ces/run",
+          evidenceRemoteRoot: "/worksp\u00e1ces/run/evidence",
+          workspaceClient: new ProbeClient(true),
+          evidenceClient,
+        }),
+      (error: unknown) => error instanceof ResultStoreError && error.code === "invalid",
+    );
+
+    for (const root of ["/evidence/%2e%2e/private", "/evidence?query", "/evidence#fragment", "/evidence/\ud800"]) {
+      await assert.rejects(
+        async () =>
+          await verifyEvidenceIsolation({
+            workspaceRemoteRoot: "/workspaces/run",
+            evidenceRemoteRoot: root,
+            workspaceClient: new ProbeClient(true),
+            evidenceClient,
+          }),
+        (error: unknown) => error instanceof ResultStoreError && error.code === "invalid",
+      );
+    }
+    assert.equal(evidenceClient.objects.size, 0);
+  });
+
   it("fails closed when the workspace credential can access evidence", async () => {
     const shared = new ProbeClient();
     await assert.rejects(

@@ -141,12 +141,46 @@ describe("Drive9ResultStoreBackend", () => {
   });
 
   it("rejects paths outside the evidence namespace", async () => {
-    const backend = new Drive9ResultStoreBackend({ client: new FakeDrive9Client(), evidenceRoot: "/evidence" });
-    for (const path of ["/absolute", "../escape", "a/../b", "a\\b", ""]) {
+    const client = new FakeDrive9Client();
+    const backend = new Drive9ResultStoreBackend({ client, evidenceRoot: "/evidence" });
+    for (const path of [
+      "/absolute",
+      "../escape",
+      "a/../b",
+      "a\\b",
+      "encoded%2fslash",
+      "query?value",
+      "fragment#value",
+      "line\nbreak",
+      "unpaired\ud800surrogate",
+      "",
+    ]) {
       await assert.rejects(
         async () => await backend.create(path, Buffer.from("x")),
         (error: unknown) => error instanceof ResultStoreError && error.code === "invalid",
       );
     }
+    assert.equal(client.directories.size, 0);
+    assert.equal(client.objects.size, 0);
+  });
+
+  it("rejects transport-unsafe roots and NFC-normalizes evidence paths", async () => {
+    for (const root of [
+      "/evidence/%2e%2e/private",
+      "/evidence?query",
+      "/evidence#fragment",
+      "/evidence\nother",
+      "/evidence/\ud800",
+    ]) {
+      assert.throws(
+        () => new Drive9ResultStoreBackend({ client: new FakeDrive9Client(), evidenceRoot: root }),
+        (error: unknown) => error instanceof ResultStoreError && error.code === "invalid",
+      );
+    }
+
+    const client = new FakeDrive9Client();
+    const backend = new Drive9ResultStoreBackend({ client, evidenceRoot: "/e\u0301vidence" });
+    await backend.create("re\u0301sult/object", Buffer.from("normalized"));
+    assert.equal(Buffer.from(client.objects.get("/\u00e9vidence/r\u00e9sult/object")?.data ?? []).toString(), "normalized");
   });
 });

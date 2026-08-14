@@ -9,6 +9,7 @@ import {
   ok,
   type Result,
 } from "@earendil-works/pi-agent-core";
+import { normalizeDrive9AbsoluteRoot, normalizeDrive9PathText } from "./drive9-path.js";
 
 export interface Drive9FileEntry {
   name: string;
@@ -28,7 +29,9 @@ export interface Drive9Stat {
 
 export interface Drive9FileSystemClient {
   read(path: string): Promise<Uint8Array>;
+  readStream?(path: string): Promise<ReadableStream<Uint8Array>>;
   write(path: string, data: Uint8Array): Promise<void>;
+  createFile?(path: string): Promise<number>;
   append(path: string, data: Uint8Array): Promise<void>;
   list(path: string): Promise<Drive9FileEntry[]>;
   stat(path: string): Promise<Drive9Stat>;
@@ -79,6 +82,11 @@ function isMissing(value: unknown): boolean {
   return statusCode(value) === 404 || errorMessage(value).includes("not found");
 }
 
+function isConflict(value: unknown): boolean {
+  const message = errorMessage(value);
+  return statusCode(value) === 409 || message.includes("already exists");
+}
+
 function toFileError(value: unknown, path?: string): FileError {
   if (value instanceof FileError) return value;
   const cause = errorValue(value);
@@ -106,36 +114,26 @@ function toFileError(value: unknown, path?: string): FileError {
 }
 
 function normalizeRoot(value: string, label: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.includes("\0") ||
-    value.includes("\\") ||
-    !posix.isAbsolute(value)
-  ) {
-    throw new TypeError(`${label} must be an absolute POSIX path`);
-  }
-  const normalized = posix.normalize(value);
-  if (normalized === "/") throw new TypeError(`${label} cannot be the tenant root`);
-  return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  return normalizeDrive9AbsoluteRoot(value, label, (message) => new TypeError(message));
 }
 
 function isWithin(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
 }
 
-function validateComponent(value: unknown, label: string): string {
-  if (
-    typeof value !== "string" ||
-    value === "." ||
-    value === ".." ||
-    value.includes("\0") ||
-    value.includes("/") ||
-    value.includes("\\")
-  ) {
-    throw new FileError("invalid", `${label} must be a single path component`);
+function validateComponent(
+  value: unknown,
+  label: string,
+  options: { allowEmpty?: boolean; backend?: boolean } = {},
+): string {
+  const code = options.backend === true ? "unknown" : "invalid";
+  const normalized = normalizeDrive9PathText(value, label, options.allowEmpty ?? true, (message) =>
+    new FileError(code, message),
+  );
+  if (normalized === "." || normalized === ".." || normalized.includes("/")) {
+    throw new FileError(code, `${label} must be a single path component`);
   }
-  return value;
+  return normalized;
 }
 
 function fileKind(mode: number | undefined, isDir: boolean): FileKind {
@@ -158,22 +156,45 @@ function materializeInfo(path: string, info: Drive9FileEntry | Drive9Stat): File
   };
 }
 
+function decodeUtf8(
+  decoder: TextDecoder,
+  path: string,
+  bytes?: Uint8Array,
+  stream = false,
+): string {
+  try {
+    return bytes === undefined ? decoder.decode() : decoder.decode(bytes, { stream });
+  } catch (error) {
+    throw new FileError("invalid", "file is not valid UTF-8", path, errorValue(error));
+  }
+}
+
 export class Drive9FileSystem implements FileSystem {
-  cwd: string;
   readonly root: string;
   readonly tempRoot: string;
 
   private readonly client: Drive9FileSystemClient;
+  private currentWorkingDirectory: string;
   private readonly temporaryPaths = new Map<string, boolean>();
   private mutationTail: Promise<void> = Promise.resolve();
 
   constructor(options: Drive9FileSystemOptions) {
     this.client = options.client;
     this.root = normalizeRoot(options.root, "root");
-    this.cwd = normalizeRoot(options.cwd ?? this.root, "cwd");
+    this.currentWorkingDirectory = normalizeRoot(options.cwd ?? this.root, "cwd");
     this.tempRoot = normalizeRoot(options.tempRoot ?? posix.join(this.root, ".drive9-pi-tmp"), "tempRoot");
-    if (!isWithin(this.root, this.cwd)) throw new TypeError("cwd must be inside root");
+    if (!isWithin(this.root, this.currentWorkingDirectory)) throw new TypeError("cwd must be inside root");
     if (!isWithin(this.root, this.tempRoot)) throw new TypeError("tempRoot must be inside root");
+  }
+
+  get cwd(): string {
+    return this.currentWorkingDirectory;
+  }
+
+  set cwd(value: string) {
+    const normalized = normalizeRoot(value, "cwd");
+    if (!isWithin(this.root, normalized)) throw new TypeError("cwd must be inside root");
+    this.currentWorkingDirectory = normalized;
   }
 
   async absolutePath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
@@ -182,10 +203,11 @@ export class Drive9FileSystem implements FileSystem {
 
   async joinPath(parts: string[], abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
     return await this.operation(undefined, abortSignal, async () => {
-      if (!Array.isArray(parts) || parts.some((part) => typeof part !== "string" || part.includes("\0"))) {
-        throw new FileError("invalid", "path parts must be strings without null bytes");
-      }
-      return this.addressedPath(posix.join(...parts));
+      if (!Array.isArray(parts)) throw new FileError("invalid", "path parts must be an array");
+      const normalized = parts.map((part) =>
+        normalizeDrive9PathText(part, "path part", true, (message) => new FileError("invalid", message)),
+      );
+      return this.addressedPath(posix.join(...normalized));
     });
   }
 
@@ -206,19 +228,24 @@ export class Drive9FileSystem implements FileSystem {
     if (options?.maxLines !== undefined && (!Number.isSafeInteger(options.maxLines) || options.maxLines < 0)) {
       return err(new FileError("invalid", "maxLines must be a non-negative integer", this.safeAddress(path)));
     }
-    const result = await this.readTextFile(path, options?.abortSignal);
-    if (!result.ok) return result;
-    const lines = result.value.split(/\r?\n/);
-    if (lines.at(-1) === "") lines.pop();
-    return ok(options?.maxLines === undefined ? lines : lines.slice(0, options.maxLines));
+    return await this.operation(path, options?.abortSignal, async () => {
+      const addressed = this.addressedPath(path);
+      if (options?.maxLines === 0) return [];
+      await this.assertReadableFile(addressed);
+      if (this.client.readStream !== undefined) {
+        return await this.readTextLinesFromStream(addressed, options?.maxLines, options?.abortSignal);
+      }
+      const text = decodeUtf8(new TextDecoder("utf-8", { fatal: true }), addressed, await this.client.read(addressed));
+      const lines = text.split(/\r?\n/);
+      if (lines.at(-1) === "") lines.pop();
+      return options?.maxLines === undefined ? lines : lines.slice(0, options.maxLines);
+    });
   }
 
   async readBinaryFile(path: string, abortSignal?: AbortSignal): Promise<Result<Uint8Array, FileError>> {
     return await this.operation(path, abortSignal, async () => {
       const addressed = this.addressedPath(path);
-      const info = await this.statInfo(addressed);
-      if (info.kind === "directory") throw new FileError("is_directory", "path is a directory", addressed);
-      if (info.kind === "symlink") throw new FileError("not_supported", "symlink reads are not supported", addressed);
+      await this.assertReadableFile(addressed);
       return Uint8Array.from(await this.client.read(addressed));
     });
   }
@@ -286,19 +313,15 @@ export class Drive9FileSystem implements FileSystem {
       const addressed = this.addressedPath(path);
       const directory = await this.statInfo(addressed);
       if (directory.kind !== "directory") throw new FileError("not_directory", "path is not a directory", addressed);
+      const childPaths = new Set<string>();
       const children = (await this.client.list(addressed)).map((entry) => {
-        if (
-          typeof entry.name !== "string" ||
-          entry.name.length === 0 ||
-          entry.name === "." ||
-          entry.name === ".." ||
-          entry.name.includes("/") ||
-          entry.name.includes("\\") ||
-          entry.name.includes("\0")
-        ) {
-          throw new FileError("unknown", "Drive9 returned an invalid directory child", addressed);
+        const name = validateComponent(entry.name, "Drive9 directory child", { allowEmpty: false, backend: true });
+        const childPath = posix.join(addressed, name);
+        if (childPaths.has(childPath)) {
+          throw new FileError("unknown", "Drive9 returned duplicate directory children after NFC normalization", addressed);
         }
-        return materializeInfo(posix.join(addressed, entry.name), entry);
+        childPaths.add(childPath);
+        return materializeInfo(childPath, entry);
       });
       return children.sort((left, right) => left.name.localeCompare(right.name));
     });
@@ -386,19 +409,21 @@ export class Drive9FileSystem implements FileSystem {
 
   async cleanup(): Promise<void> {
     const paths = [...this.temporaryPaths.entries()].sort(([left], [right]) => right.length - left.length);
-    this.temporaryPaths.clear();
     for (const [path, directory] of paths) {
       try {
-        await this.remove(path, { recursive: directory, force: true });
+        const removed = await this.remove(path, { recursive: directory, force: true });
+        if (removed.ok) this.temporaryPaths.delete(path);
       } catch {}
     }
   }
 
   private addressedPath(path: string): string {
-    if (typeof path !== "string" || path.length === 0 || path.includes("\0") || path.includes("\\")) {
-      throw new FileError("invalid", "path must be a non-empty POSIX path");
-    }
-    const addressed = posix.normalize(posix.isAbsolute(path) ? path : posix.resolve(this.cwd, path));
+    const transportSafe = normalizeDrive9PathText(path, "path", false, (message) =>
+      new FileError("invalid", message),
+    );
+    const addressed = posix.normalize(
+      posix.isAbsolute(transportSafe) ? transportSafe : posix.resolve(this.cwd, transportSafe),
+    );
     if (!isWithin(this.root, addressed)) throw new FileError("permission_denied", "path escapes Drive9 root", addressed);
     return addressed;
   }
@@ -429,18 +454,90 @@ export class Drive9FileSystem implements FileSystem {
     }
   }
 
-  private async mutate(
+  private async mutate<T>(
     path: string,
     signal: AbortSignal | undefined,
-    operation: () => Promise<void>,
-  ): Promise<Result<void, FileError>> {
-    const run = async (): Promise<Result<void, FileError>> => await this.operation(path, signal, operation);
+    operation: () => Promise<T>,
+  ): Promise<Result<T, FileError>> {
+    const run = async (): Promise<Result<T, FileError>> => await this.operation(path, signal, operation);
     const running = this.mutationTail.then(run, run);
     this.mutationTail = running.then(
       () => undefined,
       () => undefined,
     );
     return await running;
+  }
+
+  private async assertReadableFile(path: string): Promise<void> {
+    const info = await this.statInfo(path);
+    if (info.kind === "directory") throw new FileError("is_directory", "path is a directory", path);
+    if (info.kind === "symlink") throw new FileError("not_supported", "symlink reads are not supported", path);
+  }
+
+  private async readTextLinesFromStream(
+    path: string,
+    maxLines: number | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<string[]> {
+    const stream = await this.client.readStream!(path);
+    if (signal?.aborted) {
+      try {
+        await stream.cancel("aborted");
+      } catch {}
+      throw new FileError("aborted", "aborted", path);
+    }
+
+    const reader = stream.getReader();
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const lines: string[] = [];
+    let pending = "";
+    let settled = false;
+    const onAbort = (): void => {
+      void reader.cancel("aborted").catch(() => undefined);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (signal?.aborted) throw new FileError("aborted", "aborted", path);
+        pending += chunk.done ? decodeUtf8(decoder, path) : decodeUtf8(decoder, path, chunk.value, true);
+
+        let newline = pending.indexOf("\n");
+        while (newline >= 0) {
+          let line = pending.slice(0, newline);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          pending = pending.slice(newline + 1);
+          lines.push(line);
+          if (maxLines !== undefined && lines.length >= maxLines) {
+            try {
+              await reader.cancel("maxLines reached");
+            } catch {}
+            if (signal?.aborted) throw new FileError("aborted", "aborted", path);
+            settled = true;
+            return lines;
+          }
+          newline = pending.indexOf("\n");
+        }
+
+        if (chunk.done) {
+          if (pending.length > 0) lines.push(pending);
+          settled = true;
+          return lines;
+        }
+      }
+    } catch (error) {
+      if (signal?.aborted) throw new FileError("aborted", "aborted", path, errorValue(error));
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      if (!settled) {
+        try {
+          await reader.cancel("read did not complete");
+        } catch {}
+      }
+      reader.releaseLock();
+    }
   }
 
   private async statInfo(path: string): Promise<FileInfo> {
@@ -493,16 +590,27 @@ export class Drive9FileSystem implements FileSystem {
     if (!tempDirectory.ok) return tempDirectory;
     for (let attempt = 0; attempt < 32; attempt += 1) {
       const path = posix.join(this.tempRoot, `${prefix}${randomUUID()}${suffix}`);
-      const exists = await this.exists(path, signal);
-      if (!exists.ok) return exists;
-      if (exists.value) continue;
-      const created = directory
-        ? await this.createDir(path, {
-            recursive: false,
-            ...(signal === undefined ? {} : { abortSignal: signal }),
-          })
-        : await this.writeFile(path, new Uint8Array(), signal);
+      const created = await this.mutate(path, signal, async () => {
+        try {
+          if (directory) await this.client.mkdir(path, 0o700);
+          else {
+            if (this.client.createFile === undefined) {
+              throw new FileError(
+                "not_supported",
+                "atomic temporary files require Drive9 Client.createFile",
+                path,
+              );
+            }
+            await this.client.createFile(path);
+          }
+        } catch (error) {
+          if (isConflict(error)) return false;
+          throw error;
+        }
+        return true;
+      });
       if (!created.ok) return created;
+      if (!created.value) continue;
       this.temporaryPaths.set(path, directory);
       return ok(path);
     }

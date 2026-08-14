@@ -13,6 +13,7 @@ import {
 import { createFauxCore, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Type } from "typebox";
 import {
+  createDrive9FileTools,
   createDrive9PiIntegration,
   deriveResultId,
   type CompactToolResultDetails,
@@ -20,6 +21,7 @@ import {
   type Drive9FileSystemClient,
   type Drive9ResultClient,
   type Drive9Stat,
+  Drive9FileSystem,
 } from "../src/index.js";
 
 class StatusError extends Error {
@@ -74,6 +76,14 @@ class MemoryDrive9Client implements Drive9FileSystemClient, Drive9ResultClient {
   async write(path: string, data: Uint8Array): Promise<void> {
     this.requireWorkspaceDirectory(posix.dirname(path));
     this.workspace.set(path, this.node(data, false, 0o100644));
+  }
+
+  async createFile(path: string): Promise<number> {
+    this.requireWorkspaceDirectory(posix.dirname(path));
+    if (this.workspace.has(path)) throw new StatusError(409, `exists: ${path}`);
+    const node = this.node(new Uint8Array(), false, 0o100600);
+    this.workspace.set(path, node);
+    return node.revision;
   }
 
   async append(path: string, data: Uint8Array): Promise<void> {
@@ -231,6 +241,37 @@ function toolResultText(message: unknown): string {
 }
 
 describe("createDrive9PiIntegration", () => {
+  it("returns file tools that can be passed directly to a Pi Agent", async () => {
+    const client = new MemoryDrive9Client();
+    const tools = createDrive9FileTools({
+      fileSystem: new Drive9FileSystem({ client, root: "/workspace" }),
+    });
+    const faux = createFauxCore({});
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("write", { path: "direct.txt", content: "Agent → Tool → Drive9" }, { id: "write-direct" }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage(fauxToolCall("read", { path: "direct.txt" }, { id: "read-direct" }), {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("done"),
+    ]);
+    const agent = new Agent({
+      streamFn: faux.streamSimple,
+      initialState: { model: faux.getModel(), tools },
+    });
+
+    await agent.prompt("Write and read the Drive9 file.");
+
+    assert.equal(client.text("/workspace/direct.txt"), "Agent → Tool → Drive9");
+    assert.deepEqual(tools.map((tool) => tool.name), ["read", "write", "edit", "list"]);
+    assert.match(
+      toolResultText(agent.state.messages.find((message) => "role" in message && message.role === "toolResult" && message.toolName === "read")),
+      /Agent → Tool → Drive9/,
+    );
+  });
+
   it("wires real Agent file tools and durable evidence without a host shell", async () => {
     const client = new MemoryDrive9Client();
     const integration = createDrive9PiIntegration({
