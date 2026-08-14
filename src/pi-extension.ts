@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { basename, posix } from "node:path";
 import { getOrThrow } from "@earendil-works/pi-agent-core";
 import type {
   ExtensionAPI,
@@ -10,7 +10,11 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Client } from "drive9";
-import { Drive9FileSystem, type Drive9FileSystemClient } from "./drive9-file-system.js";
+import {
+  Drive9FileSystem,
+  type Drive9FileSystemClient,
+  type Drive9Stat,
+} from "./drive9-file-system.js";
 import {
   createDrive9CodingAgentTools,
   createDrive9StorageOnlyBashOperations,
@@ -226,6 +230,56 @@ function resultCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+function resultStatusCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("statusCode" in error)) return undefined;
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  return typeof statusCode === "number" ? statusCode : undefined;
+}
+
+function isMissingResult(error: unknown): boolean {
+  return (
+    resultCode(error) === "not_found" ||
+    resultStatusCode(error) === 404 ||
+    errorMessage(error).toLowerCase().includes("not found")
+  );
+}
+
+function isConflictResult(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return (
+    resultStatusCode(error) === 409 ||
+    message.includes("already exists") ||
+    message.includes("exists:")
+  );
+}
+
+async function createWorkspaceRoot(
+  client: Drive9FileSystemClient,
+  root: string,
+): Promise<string> {
+  const normalized = new Drive9FileSystem({ client, root }).root;
+  let current = "";
+  for (const segment of normalized.split("/").filter(Boolean)) {
+    current = posix.join(current, "/", segment);
+    let info: Drive9Stat | undefined;
+    try {
+      info = await client.stat(current);
+    } catch (error) {
+      if (!isMissingResult(error)) throw error;
+      try {
+        await client.mkdir(current, 0o755);
+      } catch (mkdirError) {
+        if (!isConflictResult(mkdirError)) throw mkdirError;
+      }
+      info = await client.stat(current);
+    }
+    if (!info.isDir) {
+      throw new TypeError(`Drive9 workspace path component is not a directory: ${current}`);
+    }
+  }
+  return normalized;
+}
+
 async function verifyWrite(fileSystem: Drive9FileSystem): Promise<void> {
   const temporaryPath = getOrThrow(
     await fileSystem.createTempFile({ prefix: "verify-", suffix: ".txt" }),
@@ -420,11 +474,11 @@ export function createDrive9PiExtension(options: Drive9PiExtensionOptions = {}):
             const normalized = new Drive9FileSystem({ client, root: requestedRoot }).root;
             const create = await context.ui.confirm(
               "Create Drive9 workspace?",
-              `${normalized} does not exist. Create it? Its parent directory must already exist.`,
+              `${normalized} does not exist. Create it and any missing parent directories?`,
             );
             if (!create) return;
-            await client.mkdir(normalized, 0o755);
-            fileSystem = await validateWorkspace(client, normalized);
+            const createdRoot = await createWorkspaceRoot(client, normalized);
+            fileSystem = await validateWorkspace(client, createdRoot);
           }
 
           const configPath = getDrive9ProjectConfigPath(context.cwd);

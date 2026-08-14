@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { basename, posix } from "node:path";
 import { getOrThrow } from "@earendil-works/pi-agent-core";
 import { Client } from "drive9";
-import { Drive9FileSystem } from "./drive9-file-system.js";
+import { Drive9FileSystem, } from "./drive9-file-system.js";
 import { createDrive9CodingAgentTools, createDrive9StorageOnlyBashOperations, createUnavailableCodingAgentTools, DRIVE9_STORAGE_ONLY_MESSAGE, } from "./pi-coding-agent.js";
 import { DRIVE9_COMMAND_DESCRIPTION, registerDrive9Command, } from "./pi-extension-commands.js";
 import { DRIVE9_EXTENSION_CONFIG_VERSION, getDrive9ProjectConfigPath, getDrive9ProjectTrustMarkerPath, resolveDrive9ExtensionConfig, writeDrive9ProjectConfig, } from "./pi-extension-config.js";
@@ -146,6 +146,50 @@ function resultCode(error) {
         return undefined;
     const code = error.code;
     return typeof code === "string" ? code : undefined;
+}
+function resultStatusCode(error) {
+    if (typeof error !== "object" || error === null || !("statusCode" in error))
+        return undefined;
+    const statusCode = error.statusCode;
+    return typeof statusCode === "number" ? statusCode : undefined;
+}
+function isMissingResult(error) {
+    return (resultCode(error) === "not_found" ||
+        resultStatusCode(error) === 404 ||
+        errorMessage(error).toLowerCase().includes("not found"));
+}
+function isConflictResult(error) {
+    const message = errorMessage(error).toLowerCase();
+    return (resultStatusCode(error) === 409 ||
+        message.includes("already exists") ||
+        message.includes("exists:"));
+}
+async function createWorkspaceRoot(client, root) {
+    const normalized = new Drive9FileSystem({ client, root }).root;
+    let current = "";
+    for (const segment of normalized.split("/").filter(Boolean)) {
+        current = posix.join(current, "/", segment);
+        let info;
+        try {
+            info = await client.stat(current);
+        }
+        catch (error) {
+            if (!isMissingResult(error))
+                throw error;
+            try {
+                await client.mkdir(current, 0o755);
+            }
+            catch (mkdirError) {
+                if (!isConflictResult(mkdirError))
+                    throw mkdirError;
+            }
+            info = await client.stat(current);
+        }
+        if (!info.isDir) {
+            throw new TypeError(`Drive9 workspace path component is not a directory: ${current}`);
+        }
+    }
+    return normalized;
 }
 async function verifyWrite(fileSystem) {
     const temporaryPath = getOrThrow(await fileSystem.createTempFile({ prefix: "verify-", suffix: ".txt" }));
@@ -305,11 +349,11 @@ export function createDrive9PiExtension(options = {}) {
                         if (resultCode(error) !== "not_found")
                             throw error;
                         const normalized = new Drive9FileSystem({ client, root: requestedRoot }).root;
-                        const create = await context.ui.confirm("Create Drive9 workspace?", `${normalized} does not exist. Create it? Its parent directory must already exist.`);
+                        const create = await context.ui.confirm("Create Drive9 workspace?", `${normalized} does not exist. Create it and any missing parent directories?`);
                         if (!create)
                             return;
-                        await client.mkdir(normalized, 0o755);
-                        fileSystem = await validateWorkspace(client, normalized);
+                        const createdRoot = await createWorkspaceRoot(client, normalized);
+                        fileSystem = await validateWorkspace(client, createdRoot);
                     }
                     const configPath = getDrive9ProjectConfigPath(context.cwd);
                     const confirmed = await context.ui.confirm("Enable Drive9 for this project?", `Write ${configPath}\nRoot: ${fileSystem.root}`);

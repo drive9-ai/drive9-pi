@@ -58,7 +58,7 @@ interface RecordedCommand {
 const BOUNDARY_TOOL_NAMES = ["read", "write", "edit", "ls", "bash", "grep", "find"];
 const OWN_SOURCE_INFO: SourceInfo = {
   path: "/extensions/drive9-pi.js",
-  source: "@drive9-ai/drive9-pi",
+  source: "@drive9/drive9-pi",
   scope: "temporary",
   origin: "top-level",
 };
@@ -454,7 +454,7 @@ describe("Pi coding-agent filesystem integration", () => {
   it("supports the standard setup, status, verify, and disable workflow", async () => {
     const cwd = await mkdtemp(posix.join(tmpdir(), "drive9-pi-extension-"));
     const suggestedRoot = `/workspaces/${posix.basename(cwd)}`;
-    const client = new MemoryWorkspaceClient(suggestedRoot);
+    const client = new MemoryWorkspaceClient("/");
     const extensionOptions = {
       createClient: () => client,
       environment: {},
@@ -463,7 +463,7 @@ describe("Pi coding-agent filesystem integration", () => {
     try {
       const setup = new ExtensionRecorder({ cwd });
       setup.inputResponses.push("");
-      setup.confirmResponses.push(true);
+      setup.confirmResponses.push(true, true);
       createDrive9PiExtension(extensionOptions)(setup.api);
       await setup.emit("session_start", { type: "session_start", reason: "startup" });
       assert.ok(setup.commands.has("drive9"));
@@ -473,6 +473,8 @@ describe("Pi coding-agent filesystem integration", () => {
       assert.match(setup.notifications.at(-1)?.message ?? "", /Drive9: inactive/);
       await setup.command("drive9", "setup");
       assert.equal(setup.reloadCount, 1);
+      assert.equal(client.nodes.get("/workspaces")?.isDir, true);
+      assert.equal(client.nodes.get(suggestedRoot)?.isDir, true);
 
       const configPath = getDrive9ProjectConfigPath(cwd);
       assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
@@ -511,6 +513,27 @@ describe("Pi coding-agent filesystem integration", () => {
       assert.equal(disabled.tools.size, 0);
       assert.equal(disabled.statuses.get("drive9"), "Drive9: off");
       await active.emit("session_shutdown", { type: "session_shutdown" });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves project configuration unchanged when a workspace parent is a file", async () => {
+    const cwd = await mkdtemp(posix.join(tmpdir(), "drive9-pi-extension-file-parent-"));
+    const client = new MemoryWorkspaceClient("/");
+    await client.write("/workspaces", Buffer.from("not a directory"));
+
+    try {
+      const setup = new ExtensionRecorder({ cwd });
+      setup.confirmResponses.push(true);
+      createDrive9PiExtension({ createClient: () => client, environment: {} })(setup.api);
+      await setup.emit("session_start", { type: "session_start", reason: "startup" });
+      await setup.command("drive9", "setup /workspaces/project");
+
+      assert.equal(setup.reloadCount, 0);
+      assert.equal(client.nodes.has("/workspaces/project"), false);
+      assert.match(setup.notifications.at(-1)?.message ?? "", /path component is not a directory/);
+      await assert.rejects(readFile(getDrive9ProjectConfigPath(cwd), "utf8"), /ENOENT/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

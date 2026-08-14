@@ -6,29 +6,28 @@ The normative contract is [`docs/design-lock.md`](docs/design-lock.md).
 
 ## Install
 
-The currently available installation path is Git:
+Install the public npm package through Pi's standard package manager:
 
 ```bash
 # Personal install: recorded in ~/.pi/agent/settings.json
-pi install git:github.com/drive9-ai/drive9-pi
+pi install npm:@drive9/drive9-pi
 
 # Team/project install: recorded in .pi/settings.json
-pi install -l git:github.com/drive9-ai/drive9-pi
+pi install -l npm:@drive9/drive9-pi
 git add .pi/settings.json
 ```
 
-The npm package has not been published yet. After it is published, the
-equivalent personal and project installs will be:
+To test an unreleased repository revision instead, use Pi's Git package source:
 
 ```bash
-pi install npm:@drive9-ai/drive9-pi
-pi install -l npm:@drive9-ai/drive9-pi
+pi install git:github.com/drive9-ai/drive9-pi@tag-or-commit
+pi install -l git:github.com/drive9-ai/drive9-pi@tag-or-commit
 ```
 
 After a teammate trusts the project, Pi installs a missing project package on
 startup. Pi packages execute code with the permissions of the Pi process, so
-review packages before trusting them. Git sources can use Pi's normal
-`@tag-or-commit` suffix when a pinned revision is required.
+review packages before trusting them. For Git sources, Pi's normal
+`@tag-or-commit` suffix pins the exact revision.
 
 ## Authenticate Drive9
 
@@ -47,11 +46,9 @@ be shared independently of each teammate's Drive9 credentials.
 
 ## Configure a Project
 
-Create the Drive9 directory first, then run the interactive setup from the
-local project that should use it:
+Start Pi from the local project that should use Drive9:
 
 ```bash
-drive9 fs mkdir :/workspaces/my-project
 cd ./my-project
 pi
 ```
@@ -67,8 +64,8 @@ directly as `/drive9 setup /workspaces/my-project`. Everything after `setup`
 is treated as the root, so `/drive9 setup /workspaces/team project` also works.
 Setup performs a Drive9 preflight before changing the project: credentials must
 work, the root must be a directory, and it cannot be the tenant root `/`. If
-the root is missing, setup can create it after confirmation when its parent
-directory already exists.
+the root is missing, setup can create it and any missing parent directories
+after one confirmation. The Drive9 CLI is not required for setup.
 
 After a successful preflight, setup ensures `.pi/settings.json` exists as Pi's
 standard project-trust marker, atomically writes `.pi/drive9.json`, and reloads
@@ -150,13 +147,9 @@ pi --approve --drive9-root /workspaces/my-project -p \
 ## End-to-End Hello Example
 
 This example proves that Pi wrote to Drive9 rather than to a same-named host
-path. Drive9 CLI paths use the `:/...` form; the Pi extension root uses `/...`
-without the colon.
+path. It does not require the Drive9 CLI.
 
 ```bash
-# Terminal 1: authenticate as shown above and create the remote root once
-drive9 fs mkdir :/workspaces/my-project
-
 # Start Pi in the local project
 cd ./my-project
 pi
@@ -171,12 +164,14 @@ Use the write tool to write exactly "hello from Pi\n" to hello.txt,
 then use the read tool to confirm it.
 ```
 
-Verify from another terminal, outside Pi:
+Verify through the extension:
 
-```bash
-drive9 fs cat :/workspaces/my-project/hello.txt
-# hello from Pi
+```text
+/drive9 verify write
 ```
+
+If the Drive9 CLI is already installed, `drive9 fs cat
+:/workspaces/my-project/hello.txt` provides an optional independent check.
 
 ## Manage or Remove the Package
 
@@ -186,11 +181,12 @@ Use Pi's standard package commands rather than editing settings by hand:
 pi list                              # show installed package sources
 pi config                            # enable/disable personal resources
 pi config -l                         # configure trusted project resources
-pi remove git:github.com/drive9-ai/drive9-pi    # personal Git install
-pi remove -l git:github.com/drive9-ai/drive9-pi # project Git install
+pi remove npm:@drive9/drive9-pi      # personal npm install
+pi remove -l npm:@drive9/drive9-pi   # project npm install
 ```
 
-After an npm release, pass `npm:@drive9-ai/drive9-pi` to `pi remove` instead.
+For a Git install, pass its original `git:github.com/drive9-ai/drive9-pi`
+source to `pi remove` instead.
 `/drive9 disable` keeps the package installed and only turns off Drive9 for the
 project. `pi config` controls whether Pi loads the package resource, while
 `pi remove` removes the package registration.
@@ -244,7 +240,7 @@ factory:
 ```ts
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Client } from "drive9";
-import { createDrive9PiExtension } from "@drive9-ai/drive9-pi";
+import { createDrive9PiExtension } from "@drive9/drive9-pi";
 
 const extension: ExtensionFactory = createDrive9PiExtension({
   defaultRoot: "/workspaces/my-project",
@@ -279,7 +275,7 @@ credentials should be different scoped Drive9 credentials:
 ```ts
 import { Agent } from "@earendil-works/pi-agent-core";
 import { Client } from "drive9";
-import { createDrive9PiIntegration } from "@drive9-ai/drive9-pi";
+import { createDrive9PiIntegration } from "@drive9/drive9-pi";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -332,7 +328,7 @@ delete APIs. It does not require a mount or LayerFS layer.
 ```ts
 import { getOrThrow } from "@earendil-works/pi-agent-core";
 import { Client } from "drive9";
-import { Drive9FileSystem } from "@drive9-ai/drive9-pi";
+import { Drive9FileSystem } from "@drive9/drive9-pi";
 
 const fileSystem = new Drive9FileSystem({
   client: Client.defaultClient(),
@@ -365,7 +361,7 @@ does not promise branch, checkpoint, or rollback semantics.
 stable reference only after a CAS-protected terminal manifest is durable.
 
 ```ts
-import { createDrive9ResultStore } from "@drive9-ai/drive9-pi";
+import { createDrive9ResultStore } from "@drive9/drive9-pi";
 
 const results = createDrive9ResultStore({
   client: evidenceClient,
