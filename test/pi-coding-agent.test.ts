@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { posix } from "node:path";
 import { describe, it } from "node:test";
@@ -9,6 +9,7 @@ import type {
   ExtensionEvent,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
   createDrive9CodingAgentTools,
   createDrive9PiExtension,
@@ -39,7 +40,7 @@ interface RecordedTool {
   execute: (...args: any[]) => Promise<{
     content: Array<{ type: string; text?: string }>;
   }>;
-  renderCall?: unknown;
+  renderCall?: (...args: any[]) => unknown;
 }
 
 class MemoryWorkspaceClient implements Drive9FileSystemClient {
@@ -184,9 +185,32 @@ async function toolText(
     .join("\n");
 }
 
+async function selectedToolExecutionCallRenderer(
+  tool: RecordedTool,
+  cwd: string,
+): Promise<unknown> {
+  initTheme(undefined, false);
+  const codingAgentUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+  const componentUrl = new URL("./modes/interactive/components/tool-execution.js", codingAgentUrl);
+  const { ToolExecutionComponent } = await import(componentUrl.href);
+  const component = new ToolExecutionComponent(
+    tool.name,
+    "tool-call",
+    { path: "src/value.ts", edits: [{ oldText: "value = 1", newText: "value = 2" }] },
+    undefined,
+    tool,
+    { requestRender() {} },
+    cwd,
+  );
+  return (component as unknown as { getCallRenderer(): unknown }).getCallRenderer();
+}
+
 describe("Pi coding-agent filesystem integration", () => {
   it("uses Pi's canonical read/write/edit/ls tools without touching the host filesystem", async () => {
     const hostRoot = await mkdtemp(posix.join(tmpdir(), "drive9-pi-canonical-"));
+    const hostPath = posix.join(hostRoot, "src/value.ts");
+    await mkdir(posix.dirname(hostPath), { recursive: true });
+    await writeFile(hostPath, "host file must remain unchanged\n");
     const client = new MemoryWorkspaceClient(hostRoot);
     const fileSystem = new Drive9FileSystem({ client, root: hostRoot });
     const tools = new Map(
@@ -198,7 +222,9 @@ describe("Pi coding-agent filesystem integration", () => {
 
     try {
       assert.deepEqual([...tools.keys()], ["read", "write", "edit", "ls", "bash"]);
-      assert.equal("renderCall" in (tools.get("edit") ?? {}), false);
+      const editTool = tools.get("edit")!;
+      assert.equal(typeof editTool.renderCall, "function");
+      assert.equal(await selectedToolExecutionCallRenderer(editTool, hostRoot), editTool.renderCall);
 
       await toolText(tools.get("write")!, { path: "src/value.ts", content: "export const value = 1;\n" });
       await toolText(tools.get("edit")!, {
@@ -209,7 +235,7 @@ describe("Pi coding-agent filesystem integration", () => {
       assert.equal(client.text(posix.join(hostRoot, "src/value.ts")), "export const value = 2;\n");
       assert.match(await toolText(tools.get("read")!, { path: "src/value.ts" }), /value = 2/);
       assert.equal(await toolText(tools.get("ls")!, { path: "." }), "src/");
-      await assert.rejects(access(posix.join(hostRoot, "src/value.ts")));
+      assert.equal(await readFile(hostPath, "utf8"), "host file must remain unchanged\n");
       await assert.rejects(toolText(tools.get("bash")!, { command: "pwd" }), /does not provide bash/);
     } finally {
       await fileSystem.cleanup();

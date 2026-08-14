@@ -14,6 +14,7 @@ describe("Pi package manifest", () => {
     assert.deepEqual(packageJson.pi?.extensions, ["./dist/pi-extension.js"]);
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-agent-core"], "*");
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
+    assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-tui"], "*");
     assert.equal(packageJson.peerDependencies?.typebox, "*");
   });
 });

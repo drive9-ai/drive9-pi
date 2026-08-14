@@ -68,9 +68,10 @@ export default extension;
 For lower-level composition, `createDrive9CodingAgentTools` returns Pi's
 official `read`, `write`, `edit`, `ls`, and `bash` definitions. The bash
 definition is intentionally storage-only and returns an error; it never starts
-a host process. The remote edit tool omits Pi's local-filesystem preview
-renderer so rendering cannot read a same-named host file before the Drive9 edit
-executes. Custom hosts that register only these definitions must also block any
+a host process. The remote edit tool explicitly overrides Pi's local-filesystem
+preview with a neutral Drive9-safe renderer so the TUI cannot fall back to a
+built-in renderer that reads a same-named host file. Custom hosts that register
+only these definitions must also block any
 separately enabled local `grep`, `find`, and interactive `!` execution, as
 `createDrive9PiExtension` does.
 

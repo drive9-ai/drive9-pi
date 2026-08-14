@@ -12,6 +12,7 @@ import {
   type ReadOperations,
   type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Drive9FileSystem } from "./drive9-file-system.js";
 
 export const DRIVE9_STORAGE_ONLY_MESSAGE =
@@ -30,7 +31,7 @@ export interface CreateDrive9CodingAgentToolsOptions {
 export type Drive9CodingAgentTool =
   | ReturnType<typeof createReadToolDefinition>
   | ReturnType<typeof createWriteToolDefinition>
-  | Omit<ReturnType<typeof createEditToolDefinition>, "renderCall">
+  | ReturnType<typeof createEditToolDefinition>
   | ReturnType<typeof createLsToolDefinition>
   | ReturnType<typeof createBashToolDefinition>;
 
@@ -89,11 +90,20 @@ export function createDrive9StorageOnlyBashOperations(
   };
 }
 
-function withoutEditCallRenderer(
+function withDrive9EditCallRenderer(
   tool: ReturnType<typeof createEditToolDefinition>,
-): Omit<ReturnType<typeof createEditToolDefinition>, "renderCall"> {
-  const { renderCall: _localFilesystemPreview, ...safeTool } = tool;
-  return safeTool;
+): ReturnType<typeof createEditToolDefinition> {
+  return {
+    ...tool,
+    renderCall(args, theme) {
+      const path = typeof args.path === "string" && args.path.length > 0 ? args.path : "...";
+      return new Text(
+        `${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", path)}`,
+        0,
+        0,
+      );
+    },
+  };
 }
 
 function storageOnlyBash(root: string, message: string): ReturnType<typeof createBashToolDefinition> {
@@ -116,7 +126,7 @@ export function createDrive9CodingAgentTools(
   const tools: Drive9CodingAgentTool[] = [
     createReadToolDefinition(fileSystem.root, { operations }),
     createWriteToolDefinition(fileSystem.root, { operations }),
-    withoutEditCallRenderer(createEditToolDefinition(fileSystem.root, { operations })),
+    withDrive9EditCallRenderer(createEditToolDefinition(fileSystem.root, { operations })),
     createLsToolDefinition(fileSystem.root, { operations }),
     storageOnlyBash(fileSystem.root, DRIVE9_STORAGE_ONLY_MESSAGE),
   ];
@@ -136,7 +146,7 @@ export function createUnavailableCodingAgentTools(root: string, message: string)
   const tools: Drive9CodingAgentTool[] = [
     createReadToolDefinition(root),
     createWriteToolDefinition(root),
-    withoutEditCallRenderer(createEditToolDefinition(root)),
+    withDrive9EditCallRenderer(createEditToolDefinition(root)),
     createLsToolDefinition(root),
     storageOnlyBash(root, message),
   ];
