@@ -49,6 +49,28 @@ export {
   createDrive9PiExtension,
   type Drive9PiExtensionOptions,
 } from "./pi-extension.js";
+export {
+  DRIVE9_EXTENSION_CONFIG_FILENAME,
+  DRIVE9_EXTENSION_CONFIG_VERSION,
+  DRIVE9_PROJECT_TRUST_MARKER_FILENAME,
+  Drive9ExtensionConfigError,
+  ensureDrive9ProjectTrustMarker,
+  getDrive9ProjectConfigPath,
+  getDrive9ProjectTrustMarkerPath,
+  parseDrive9ExtensionConfig,
+  readDrive9ProjectConfig,
+  resolveDrive9ExtensionConfig,
+  validateDrive9ExtensionConfig,
+  writeDrive9ProjectConfig,
+  type Drive9ExtensionConfig,
+  type Drive9ExtensionConfigIO,
+  type Drive9ExtensionConfigSource,
+  type EnsureDrive9ProjectTrustMarkerOptions,
+  type ReadDrive9ProjectConfigOptions,
+  type ResolvedDrive9ExtensionConfig,
+  type ResolveDrive9ExtensionConfigOptions,
+  type WriteDrive9ProjectConfigOptions,
+} from "./pi-extension-config.js";
 export { deriveResultId, encodeResultIdentity } from "./result-id.js";
 export { PersistentToolResultStore } from "./tool-result-store.js";
 export {

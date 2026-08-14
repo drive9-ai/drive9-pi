@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/drive9-ai/drive9-pi/main/schema/drive9.schema.json",
+  "title": "drive9-pi project configuration",
+  "description": "Configuration stored in .pi/drive9.json alongside the project's .pi/settings.json trust marker.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "enabled",
+    "root"
+  ],
+  "properties": {
+    "version": {
+      "description": "Configuration format version.",
+      "type": "integer",
+      "const": 1
+    },
+    "enabled": {
+      "description": "Whether Drive9 filesystem mode is enabled for this project.",
+      "type": "boolean"
+    },
+    "root": {
+      "description": "Canonical absolute Drive9 POSIX directory path. The tenant root '/', dot segments, repeated slashes, and a trailing slash are not allowed.",
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^/(?!\\.\\.?($|/))[^/%?#\\\\\\u0000-\\u001F\\u007F]+(?:/(?!\\.\\.?($|/))[^/%?#\\\\\\u0000-\\u001F\\u007F]+)*$"
+    }
+  }
+}
