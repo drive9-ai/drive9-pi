@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">Drive9 Pi cumulative context savings</title>
+  <desc id="desc">Five 1.47 MB tool results compared with Drive9 references and targeted retrieval.</desc>
+  <defs>
+    <linearGradient id="inline" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#DC2626"/>
+      <stop offset="100%" stop-color="#F97316"/>
+    </linearGradient>
+    <linearGradient id="drive9" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#0D9488"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#0F172A" flood-opacity="0.13"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="675" fill="#F8FAFC"/>
+  <rect x="52" y="42" width="1096" height="591" rx="18" fill="#FFFFFF" filter="url(#shadow)"/>
+
+  <text x="86" y="106" font-family="Inter, Arial, sans-serif" font-size="38" font-weight="800" fill="#0F172A">
+    Five big tool calls: 7.35 MB inline vs ~19 KB retrieved
+  </text>
+  <text x="86" y="142" font-family="Inter, Arial, sans-serif" font-size="18" fill="#475569">
+    Cumulative projection from the measured 1.47 MB run: references first, evidence slices only when needed
+  </text>
+
+  <g transform="translate(86 194)">
+    <rect x="0" y="0" width="1028" height="300" rx="12" fill="#F8FAFC" stroke="#E2E8F0"/>
+
+    <text x="32" y="54" font-family="Inter, Arial, sans-serif" font-size="19" font-weight="700" fill="#0F172A">
+      Inline transcript
+    </text>
+    <rect x="236" y="32" width="680" height="42" rx="9" fill="url(#inline)"/>
+    <text x="936" y="59" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#7F1D1D">
+      7,350,975 B
+    </text>
+
+    <text x="32" y="136" font-family="Inter, Arial, sans-serif" font-size="19" font-weight="700" fill="#0F172A">
+      Drive9 references
+    </text>
+    <rect x="236" y="114" width="95" height="42" rx="9" fill="url(#drive9)"/>
+    <text x="352" y="141" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#0F766E">
+      10,240 B
+    </text>
+
+    <text x="32" y="218" font-family="Inter, Arial, sans-serif" font-size="19" font-weight="700" fill="#0F172A">
+      References + retrieval
+    </text>
+    <rect x="236" y="196" width="118" height="42" rx="9" fill="url(#drive9)"/>
+    <text x="375" y="223" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#0F766E">
+      19,231 B
+    </text>
+
+    <line x1="236" y1="266" x2="916" y2="266" stroke="#CBD5E1"/>
+    <text x="236" y="287" font-family="Inter, Arial, sans-serif" font-size="13" fill="#64748B">0</text>
+    <text x="916" y="287" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="13" fill="#64748B">7.35 MB raw inline baseline</text>
+  </g>
+
+  <g transform="translate(86 540)">
+    <text x="0" y="0" font-family="Inter, Arial, sans-serif" font-size="44" font-weight="800" fill="#0F172A">
+      99.74%
+    </text>
+    <text x="174" y="-2" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700" fill="#0F172A">
+      less model-visible text after targeted search + read
+    </text>
+    <text x="174" y="30" font-family="Inter, Arial, sans-serif" font-size="15" fill="#64748B">
+      Assumption: five 1.47 MB tool results, then five fact searches (~3.2 KB) plus five line reads (~5.8 KB).
+    </text>
+    <text x="0" y="76" font-family="Inter, Arial, sans-serif" font-size="16" fill="#334155">
+      The full evidence stays durable in Drive9; the context only carries handles and requested slices.
+    </text>
+  </g>
+</svg>
