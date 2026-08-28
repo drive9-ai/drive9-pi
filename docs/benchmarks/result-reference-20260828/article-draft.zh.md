@@ -147,7 +147,7 @@ await agent.prompt("Start the task.");
 这里有几条不能省略的合同：
 
 - `runId` 在同一次 run 恢复时要稳定，新 run 要更换，否则重复 toolCallId 可能别名到旧 evidence；
-- workspace 和 evidence 最好用不同 scoped credentials，并在启动时跑 `verifyEvidenceIsolation()`；
+- 本接入路径要求 workspace 和 evidence 使用不同 scoped credentials，并在启动时跑 `verifyEvidenceIsolation()`；
 - `withAgentOptions()` 会注册 Drive9 文件工具、`result_search`、`result_read` 和 fallback；如果应用已经有同名工具，要先移除或改名；
 - fallback 只处理全 text 的 model-visible content，非文本 part 会跳过，`details` 不会作为 evidence 正文保存。
 
