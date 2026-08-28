@@ -18,8 +18,8 @@ Create or pass these values from your agent runtime:
 - `sessionId`: stable Pi session id.
 - `runId`: stable run id inside the session.
 
-Use separate scoped Drive9 credentials for workspace and evidence when
-possible. Keep `workspaceRoot` and `evidenceRoot` disjoint, for example:
+This quickstart requires separate scoped Drive9 credentials for workspace and
+evidence. Keep `workspaceRoot` and `evidenceRoot` disjoint, for example:
 
 ```text
 workspaceRoot = /workspaces/acme/app
@@ -99,7 +99,6 @@ const agent = new Agent(
 
 try {
   await agent.prompt("Start the task.");
-  await agent.continue();
 } finally {
   await drive9.cleanup();
 }
@@ -139,9 +138,9 @@ Current fallback scope:
 - tools that stream very large output should eventually write directly to
   `ToolResultStore` instead of waiting for the whole result to materialize.
 
-## Deterministic Smoke Tool
+## Manual Smoke Demo
 
-For a reproducible smoke test, add one deterministic application tool:
+For a reproducible manual demo, add one deterministic application tool:
 
 ```ts
 const marker = "DRIVE9_RESULT_REFERENCE_MARKER";
@@ -174,9 +173,10 @@ Expected behavior:
 4. `result_read` can read the nearby line window.
 5. A different session cannot read the result.
 
-A scripted harness can additionally assert stable replay behavior for the same
-tool-call identity. Do not rely on an ordinary prompt to reproduce a specific
-tool-call id.
+A scripted harness can turn this into an automatic regression by asserting the
+compact result, marker absence from preview, search/read recovery, cross-session
+denial, and stable replay behavior for the same tool-call identity. Do not rely
+on an ordinary prompt to reproduce a specific tool-call id.
 
 ## What To Say Publicly
 
