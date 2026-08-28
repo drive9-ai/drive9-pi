@@ -1,0 +1,5 @@
+scenario,task,tool_output_count,raw_bytes,inline_tokens,reference_tokens,search_tokens,read_tokens,reference_plus_retrieval_tokens,reference_task_total_tokens,peak_inline_tokens,peak_reference_tokens,peak_reference_plus_retrieval_tokens,retrieval_calls,token_reduction_percent
+go test log,Find the first root cause and failing package from a large test log whose useful lines are outside preview.,1,1404168,324041,535,670,718,1923,2458,324041,535,1923,4,99.41
+tsc build log,Locate the real TypeScript file and related symbol after thousands of noisy compiler lines.,1,984183,216048,515,675,700,1890,2405,216048,515,1890,4,99.13
+repo-wide rg,Answer a fact that appears near the tail of a repo-wide search result.,1,2069010,447027,508,344,375,1227,1735,447027,508,1227,2,99.73
+5-round task,"After five large tool outputs, answer using facts from rounds 1, 3, and 5.",5,2950345,675090,2636,1002,1047,4685,7321,675090,2636,4685,6,99.31
