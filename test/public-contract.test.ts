@@ -25,6 +25,11 @@ describe("public package contract", () => {
     assert.equal(typeof packageExports.chainAfterToolCall, "function");
     assert.equal(typeof packageExports.Drive9FileSystem, "function");
     assert.equal(typeof packageExports.Drive9SdkExecutionEnv, "function");
+    assert.equal(typeof packageExports.Drive9ProtocolError, "function");
+    assert.equal(typeof packageExports.createDrive9DurableExtension, "function");
+    assert.equal(typeof packageExports.createDrive9WorkspaceCoordinator, "function");
+    assert.equal(typeof packageExports.Drive9WorkspaceCoordinator, "function");
+    assert.equal(typeof packageExports.withDrive9Effects, "function");
     assert.equal(typeof packageExports.openDrive9SingleCoordinatorStorage, "function");
     assert.equal(typeof packageExports.storageProfile, "function");
     assert.equal(typeof packageExports.requireServerFencedStorage, "function");
@@ -41,6 +46,7 @@ describe("public package contract", () => {
     assert.equal("Drive9LayerFileSystem" in packageExports, false);
     assert.equal("createDrive9ExecTool" in packageExports, false);
     assert.equal("createDrive9MountDrain" in packageExports, false);
+    assert.equal("markServerFencedStorage" in packageExports, false);
   });
 
   it("exports the config types needed by custom Pi integrations", () => {

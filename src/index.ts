@@ -11,9 +11,18 @@ export {
   type Drive9DurableFileSystemOptions,
 } from "./drive9-durable-file-system.js";
 export {
+  Drive9ProtocolError,
+  type Drive9ProtocolErrorCode,
+} from "./core/errors.js";
+export {
   Drive9SdkExecutionEnv,
   type Drive9SdkExecutionEnvOptions,
 } from "./environment/sdk-environment.js";
+export {
+  createDrive9DurableExtension,
+  DRIVE9_DURABLE_EXTENSION_NAME,
+  type Drive9DurableExtensionOptions,
+} from "./extension/durable-extension.js";
 export {
   openDrive9SingleCoordinatorStorage,
   type Drive9SingleCoordinatorStorageOptions,
@@ -55,6 +64,12 @@ export {
   type WorkspaceBindingSwitchReceipt,
 } from "./workspace/layer-backend.js";
 export {
+  createDrive9WorkspaceCoordinator,
+  Drive9WorkspaceCoordinator,
+  type Drive9WorkspaceCoordinatorOptions,
+  type WorkspaceCoordinatorBackend,
+} from "./workspace/coordinator.js";
+export {
   createDrive9ConversationCreated,
   deriveDrive9WorkspaceId,
   Drive9WorkspaceDoc,
@@ -65,6 +80,29 @@ export {
   type Drive9WorkspaceDocument,
   type Drive9WorkspaceParent,
 } from "./workspace/conversations.js";
+export {
+  type WorkspaceBinding,
+  type WorkspaceRecoveryMode,
+  type WritableWorkspaceHandle,
+} from "./workspace/recovery.js";
+export {
+  DRIVE9_WORKSPACE_BARRIER_PROTOCOL,
+  DRIVE9_WORKSPACE_PROTOCOL_VERSION,
+  type Drive9Effect,
+  type Drive9WorkspaceEffect,
+  type PublishedWorkspaceCandidate,
+  type PublishedWorkspaceRef,
+  type VerifiedWorkspaceCheckpoint,
+  type WorkspaceCandidateVerifier,
+  type WorkspaceCheckpointRequest,
+  type WorkspaceGeneration,
+  type WorkspaceMutationCoordinator,
+  type WorkspaceMutationPlan,
+} from "./workspace/types.js";
+export {
+  withDrive9Effects,
+  type Drive9ToolEffectOptions,
+} from "./workspace/wrap-tool.js";
 export {
   createAfterToolCallFallback,
   createResultReadTool,

@@ -32,8 +32,8 @@ describe("Pi package manifest", () => {
     assert.equal(packageJson.scripts?.["release:publish"], "bash scripts/release-public.sh --publish");
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-agent-core"], "*");
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
-    assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-durable"], "^1.0.0");
-    assert.equal(packageJson.peerDependencies?.["@earendil-works/chord"], "^1.0.0");
+    assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-durable"], "1.0.0");
+    assert.equal(packageJson.peerDependencies?.["@earendil-works/chord"], "1.0.0");
     assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-tui"], "*");
     assert.equal(packageJson.peerDependencies?.typebox, "*");
 

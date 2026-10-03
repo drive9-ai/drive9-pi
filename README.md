@@ -448,6 +448,45 @@ const harness = await Harness.open(
 );
 ```
 
+### Pi 1.0 durable composition (preview)
+
+The package root exports the Pi 1.0 composition units; callers do not need
+private `src/` or `dist/` imports:
+
+```ts
+import {
+  createDrive9DurableExtension,
+  createDrive9WorkspaceCoordinator,
+} from "@drive9/drive9-pi";
+
+const coordinator = createDrive9WorkspaceCoordinator({
+  sessionId,
+  storage,
+  backend,
+  initialCheckpoint,
+  maxLayerDepth: 8,
+  mode: {
+    kind: "single-coordinator-preview",
+    writerEpoch,
+  },
+});
+
+registry.install(createDrive9DurableExtension({ coordinator }));
+```
+
+`createDrive9DurableExtension()` wraps Pi's native `write`, `edit`, and `bash`
+tools; it does not register duplicate implementations. Custom tools can use
+`withDrive9Effects()` with an explicit effect classification. The root API also
+exports the coordinator/backend contracts, protocol error type, workspace
+generation/checkpoint types, and preview recovery mode needed for typed
+composition.
+
+The stable writer marker is intentionally not public. A caller cannot promote
+generic Pi `Storage` by assertion; stable mode remains reserved for a future
+package-owned adapter whose write path actually enforces the writer epoch on
+every commit. The public Pi 1.0 peer contract pins `pi-durable` and Chord to the
+exact reviewed `1.0.0` versions.
+
 ## Evidence API
 
 `PersistentToolResultStore` stores immutable output chunks and publishes a
