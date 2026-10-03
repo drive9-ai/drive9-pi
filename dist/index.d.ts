@@ -1,6 +1,8 @@
 export { Drive9FileSystem, type Drive9FileEntry, type Drive9FileSystemClient, type Drive9FileSystemOptions, type Drive9Stat, } from "./drive9-file-system.js";
 export { Drive9DurableFileSystem, type Drive9DurableFileSystemClient, type Drive9DurableFileSystemOptions, } from "./drive9-durable-file-system.js";
 export { Drive9SdkExecutionEnv, type Drive9SdkExecutionEnvOptions, } from "./environment/sdk-environment.js";
+export { openDrive9SingleCoordinatorStorage, type Drive9SingleCoordinatorStorageOptions, } from "./storage/jsonl-preview.js";
+export { requireServerFencedStorage, storageProfile, type Drive9StorageProfile, } from "./storage/profile.js";
 export { createDrive9ResultStore, Drive9ResultStoreBackend, type CreateDrive9ResultStoreOptions, type Drive9ResultClient, type Drive9ResultStoreBackendOptions, } from "./drive9-result-backend.js";
 export { verifyEvidenceIsolation, type EvidenceIsolationOptions, type EvidenceIsolationReceipt, type EvidenceProbeClient, } from "./evidence-isolation.js";
 export { verifyRuntimeIsolation, type RuntimeIsolationOptions, type RuntimeIsolationProbeClient, type RuntimeIsolationReceipt, } from "./runtime-isolation.js";

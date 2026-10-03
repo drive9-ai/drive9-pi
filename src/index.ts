@@ -15,6 +15,15 @@ export {
   type Drive9SdkExecutionEnvOptions,
 } from "./environment/sdk-environment.js";
 export {
+  openDrive9SingleCoordinatorStorage,
+  type Drive9SingleCoordinatorStorageOptions,
+} from "./storage/jsonl-preview.js";
+export {
+  requireServerFencedStorage,
+  storageProfile,
+  type Drive9StorageProfile,
+} from "./storage/profile.js";
+export {
   createDrive9ResultStore,
   Drive9ResultStoreBackend,
   type CreateDrive9ResultStoreOptions,

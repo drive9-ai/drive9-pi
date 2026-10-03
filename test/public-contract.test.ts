@@ -25,6 +25,9 @@ describe("public package contract", () => {
     assert.equal(typeof packageExports.chainAfterToolCall, "function");
     assert.equal(typeof packageExports.Drive9FileSystem, "function");
     assert.equal(typeof packageExports.Drive9SdkExecutionEnv, "function");
+    assert.equal(typeof packageExports.openDrive9SingleCoordinatorStorage, "function");
+    assert.equal(typeof packageExports.storageProfile, "function");
+    assert.equal(typeof packageExports.requireServerFencedStorage, "function");
     assert.equal(typeof packageExports.Drive9LayerWorkspaceBackend, "function");
     assert.equal(typeof packageExports.PersistentToolResultStore, "function");
     assert.equal(typeof packageExports.verifyRuntimeIsolation, "function");

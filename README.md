@@ -355,6 +355,39 @@ call. Spaces and well-formed Unicode filenames remain supported.
 This adapter mutates the live Drive9 filesystem. It does not create a layer and
 does not promise branch, checkpoint, or rollback semantics.
 
+### Pi durable state storage (single-coordinator preview)
+
+`openDrive9SingleCoordinatorStorage()` runs Pi 1.0's portable `JsonlStorage`
+on an existing, dedicated Drive9 state directory. The caller must explicitly select
+`coordination: "externally-exclusive"` and keep that root exclusive for the
+entire storage lifetime:
+
+```ts
+import { Client } from "drive9";
+import { openDrive9SingleCoordinatorStorage } from "@drive9/drive9-pi";
+
+const storage = await openDrive9SingleCoordinatorStorage(
+  {
+    client: Client.defaultClient(),
+    stateRoot: "/.drive9-pi/sessions/session-42/state",
+    coordination: "externally-exclusive",
+  },
+  context,
+);
+```
+
+This adapter passes Pi's `StorageConformance` suite and can recover committed
+JSONL state after reopening the same namespace. It is not a lease or a stale
+writer fence: it provides no automatic expiry takeover, permits no concurrent
+session writers, and is rejected by stable Drive9 publication mode. Use
+`storageProfile()` to inspect that machine-readable
+`single-coordinator-preview` classification. A stable multi-process adapter
+still requires a server-enforced writer epoch on every Pi storage commit.
+Because Drive9 does not yet expose nonzero truncate, a process crash that
+leaves a partial JSONL tail after earlier committed records fails closed on
+reopen and can require operator repair; this preview does not promise automatic
+crash-tail recovery.
+
 ### SDK execution environment (preview)
 
 `Drive9SdkExecutionEnv` exposes the same Drive9 filesystem namespace through
