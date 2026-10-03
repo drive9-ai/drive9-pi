@@ -19,6 +19,7 @@ import {
   deriveWorkspaceCandidateKey,
 } from "../src/workspace/entries.js";
 import { resolvePublishedWorkspace } from "../src/workspace/publication.js";
+import { recoverWorkspace, type WorkspaceRecoveryBackend } from "../src/workspace/recovery.js";
 import type {
   VerifiedWorkspaceCheckpoint,
   PublishedWorkspaceRef,
@@ -184,6 +185,18 @@ function verifier() {
   };
 }
 
+function unreachableRecoveryBackend(): WorkspaceRecoveryBackend {
+  const unreachable = async (): Promise<never> => {
+    throw new Error("recovery backend must not be called");
+  };
+  return {
+    currentBinding: unreachable,
+    forkFromCheckpoint: unreachable,
+    switchBinding: unreachable,
+    abandon: unreachable,
+  };
+}
+
 async function appendPublishedSuccess(
   value: Fixture,
   previous: PublishedWorkspaceRef,
@@ -294,6 +307,58 @@ test("publishes the newest successful matching candidate", async () => {
   assert.equal(published?.attemptEntryId, value.attemptId);
   assert.equal(published?.resultEntryId, value.resultId);
   assert.equal(published?.data.candidateKey, value.candidate.candidateKey);
+});
+
+test("recovery rejects a published candidate from another session before changing workspace state", async () => {
+  const value = await fixture();
+  await assert.rejects(
+    recoverWorkspace({
+      storage: value.storage,
+      conversationId: value.conversationId,
+      expectedSessionId: "session-other",
+      initialCheckpoint: {
+        checkpointId: "checkpoint-root",
+        durableSeq: 0,
+        layerId: "root-1",
+        rootLayerId: "root-1",
+        parentLayerId: null,
+        parentCheckpointId: null,
+        depth: 0,
+      },
+      verifier: verifier(),
+      backend: unreachableRecoveryBackend(),
+      context: BACKGROUND_CONTEXT,
+      maxLayerDepth: 16,
+      mode: { kind: "single-coordinator-preview", writerEpoch: "epoch-1" },
+    }),
+    (error: unknown) => error instanceof Drive9ProtocolError && error.code === "publication_breach",
+  );
+});
+
+test("recovery rejects a published candidate outside the initial root lineage", async () => {
+  const value = await fixture();
+  await assert.rejects(
+    recoverWorkspace({
+      storage: value.storage,
+      conversationId: value.conversationId,
+      expectedSessionId: "session-1",
+      initialCheckpoint: {
+        checkpointId: "checkpoint-other-root",
+        durableSeq: 0,
+        layerId: "root-other",
+        rootLayerId: "root-other",
+        parentLayerId: null,
+        parentCheckpointId: null,
+        depth: 0,
+      },
+      verifier: verifier(),
+      backend: unreachableRecoveryBackend(),
+      context: BACKGROUND_CONTEXT,
+      maxLayerDepth: 16,
+      mode: { kind: "single-coordinator-preview", writerEpoch: "epoch-1" },
+    }),
+    (error: unknown) => error instanceof Drive9ProtocolError && error.code === "publication_breach",
+  );
 });
 
 test("publishes a candidate only when its previous head matches the verified chain", async () => {

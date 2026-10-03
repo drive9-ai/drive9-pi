@@ -51,17 +51,20 @@ export interface WorkspaceRecoveryBackend {
 export type RecoverWorkspaceInput = {
   readonly storage: Storage;
   readonly conversationId: ConversationId;
+  readonly expectedSessionId?: string;
   readonly cutoff?: EntryId;
   readonly initialCheckpoint: VerifiedWorkspaceCheckpoint;
   readonly verifier: WorkspaceCandidateVerifier;
   readonly backend: WorkspaceRecoveryBackend;
   readonly context: Context;
   readonly maxLayerDepth: number;
-  readonly mode:
-    | { readonly kind: "stable" }
-    | { readonly kind: "single-coordinator-preview"; readonly writerEpoch: string };
+  readonly mode: WorkspaceRecoveryMode;
   readonly onAbandonError?: (error: Error) => void;
 };
+
+export type WorkspaceRecoveryMode =
+  | { readonly kind: "stable" }
+  | { readonly kind: "single-coordinator-preview"; readonly writerEpoch: string };
 
 export type RecoveredWorkspace = {
   readonly published: PublishedWorkspaceCandidate | undefined;
@@ -154,6 +157,17 @@ export async function recoverWorkspace(input: RecoverWorkspaceInput): Promise<Re
     verifier: input.verifier,
     context: input.context,
   });
+  if (published !== undefined) {
+    if (
+      input.expectedSessionId !== undefined &&
+      published.data.sessionId !== input.expectedSessionId
+    ) {
+      throw new Drive9ProtocolError("publication_breach", "published workspace belongs to another session");
+    }
+    if (published.data.checkpoint.rootLayerId !== input.initialCheckpoint.rootLayerId) {
+      throw new Drive9ProtocolError("publication_breach", "published workspace has a different root lineage");
+    }
+  }
   const source = published?.data.checkpoint ?? input.initialCheckpoint;
   const candidateKey = published?.data.candidateKey ?? null;
   if (source.depth >= maxLayerDepth) {
