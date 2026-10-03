@@ -1,6 +1,7 @@
 export { Drive9FileSystem, type Drive9FileEntry, type Drive9FileSystemClient, type Drive9FileSystemOptions, type Drive9Stat, } from "./drive9-file-system.js";
 export { createDrive9ResultStore, Drive9ResultStoreBackend, type CreateDrive9ResultStoreOptions, type Drive9ResultClient, type Drive9ResultStoreBackendOptions, } from "./drive9-result-backend.js";
 export { verifyEvidenceIsolation, type EvidenceIsolationOptions, type EvidenceIsolationReceipt, type EvidenceProbeClient, } from "./evidence-isolation.js";
+export { verifyRuntimeIsolation, type RuntimeIsolationOptions, type RuntimeIsolationProbeClient, type RuntimeIsolationReceipt, } from "./runtime-isolation.js";
 export { createAfterToolCallFallback, createResultReadTool, createResultSearchTool, type AfterToolCallFallbackOptions, type CompactToolResultDetails, type ResultToolOptions, type ToolResultIdentityAllocator, type ToolResultIdentityRequest, } from "./pi-adapters.js";
 export { chainAfterToolCall, createDrive9FileTools, createDrive9PiIntegration, type CreateDrive9FileToolsOptions, type Drive9PiIntegration, type Drive9PiIntegrationOptions, } from "./pi-integration.js";
 export { createDrive9CodingAgentOperations, createDrive9CodingAgentTools, createDrive9StorageOnlyBashOperations, DRIVE9_STORAGE_ONLY_MESSAGE, type CreateDrive9CodingAgentToolsOptions, type Drive9CodingAgentTool, type Drive9CodingAgentOperations, } from "./pi-coding-agent.js";
