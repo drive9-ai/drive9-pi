@@ -1,6 +1,8 @@
 export { Drive9FileSystem, } from "./drive9-file-system.js";
 export { Drive9DurableFileSystem, } from "./drive9-durable-file-system.js";
 export { Drive9SdkExecutionEnv, } from "./environment/sdk-environment.js";
+export { openDrive9SingleCoordinatorStorage, } from "./storage/jsonl-preview.js";
+export { requireServerFencedStorage, storageProfile, } from "./storage/profile.js";
 export { createDrive9ResultStore, Drive9ResultStoreBackend, } from "./drive9-result-backend.js";
 export { verifyEvidenceIsolation, } from "./evidence-isolation.js";
 export { verifyRuntimeIsolation, } from "./runtime-isolation.js";

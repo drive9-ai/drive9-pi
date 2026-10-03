@@ -85,6 +85,24 @@ This environment remains preview until real-backend tests prove that every
 acknowledged SDK write or append is immediately retrievable from another
 process. The class does not make the direct-SDK durability profile stable.
 
+### 1.3 Pi 1.0 State Storage Preview Contract
+
+`openDrive9SingleCoordinatorStorage` composes Pi's public `JsonlStorage` with a
+dedicated, pre-provisioned `Drive9DurableFileSystem` state root. It enables `fsync:true`, passes
+Pi's `StorageConformance` suite, and recovers committed JSONL state when the
+same namespace is reopened.
+
+This adapter is explicitly `single-coordinator-preview`. Its required
+`coordination: "externally-exclusive"` option is a caller acknowledgement, not
+a lease or a store-level fence. It does not support concurrent session writers,
+automatic lease-expiry takeover, or promotion to stable recovery. Stable
+construction must reject it because Drive9 filesystem appends do not carry a
+server-enforced writer epoch coupled to every Pi commit.
+
+The state root is separate from the model-visible coding workspace. Runtime
+composition must additionally run `verifyRuntimeIsolation` for the concrete
+workspace, state, and evidence credentials before exposing those authorities.
+
 ## 2. `Drive9FileSystem`
 
 `Drive9FileSystem implements FileSystem` using the ordinary Drive9 SDK. It
@@ -252,4 +270,7 @@ A releasable head must prove:
     server contract;
 12. the preview SDK execution environment shares the filesystem namespace id,
     returns typed `shell_unavailable` for every command without invoking a
-    process, and preserves cancellation precedence.
+    process, and preserves cancellation precedence;
+13. the preview JSONL storage passes Pi `StorageConformance`, reopens committed
+    state, exposes `single-coordinator-preview`, requires explicit external
+    exclusivity, and remains rejected by stable publication construction.
