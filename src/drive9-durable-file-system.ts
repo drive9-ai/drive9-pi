@@ -752,9 +752,10 @@ class Drive9TextLineReader implements TextLineReader {
 
   async readLine(context: Context): Promise<Result<TextLine | undefined, FileError>> {
     if (this.closed) return ok(undefined);
+    const signal = contextSignal(context);
     try {
       while (true) {
-        if (contextSignal(context)?.aborted) {
+        if (signal?.aborted) {
           await this.close(context);
           return err(new FileError("aborted", "aborted", this.path));
         }
@@ -771,7 +772,14 @@ class Drive9TextLineReader implements TextLineReader {
           this.pending = "";
           return ok({ text, terminated: false });
         }
-        const chunk = await this.reader.read();
+        // Race the in-flight read against abort: a held-open remote stream must
+        // not hang readLine forever. On abort we cancel the underlying reader so
+        // the pending read() rejects/settles and the remote stream is released.
+        const chunk = await this.readChunk(signal);
+        if (chunk === "aborted") {
+          await this.close(context);
+          return err(new FileError("aborted", "aborted", this.path));
+        }
         if (chunk.done) {
           this.streamDone = true;
           this.pending += decodeUtf8(this.decoder, this.path);
@@ -780,8 +788,32 @@ class Drive9TextLineReader implements TextLineReader {
         }
       }
     } catch (error) {
-      if (contextSignal(context)?.aborted) return err(new FileError("aborted", "aborted", this.path, errorValue(error)));
+      if (signal?.aborted) return err(new FileError("aborted", "aborted", this.path, errorValue(error)));
       return err(toFileError(error, this.path));
+    }
+  }
+
+  /**
+   * Read one chunk, but cancel the underlying reader if `signal` aborts while the
+   * read is in flight (a hung remote stream must not block forever). Returns
+   * `"aborted"` when the abort won the race.
+   */
+  private async readChunk(
+    signal: AbortSignal | undefined,
+  ): Promise<ReadableStreamReadResult<Uint8Array> | "aborted"> {
+    if (signal === undefined) return await this.reader.read();
+    let onAbort: (() => void) | undefined;
+    const abortPromise = new Promise<"aborted">((resolve) => {
+      onAbort = (): void => {
+        void this.reader.cancel("aborted").catch(() => undefined);
+        resolve("aborted");
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([this.reader.read(), abortPromise]);
+    } finally {
+      if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
     }
   }
 

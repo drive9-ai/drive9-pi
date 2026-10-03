@@ -522,6 +522,31 @@ describe("Drive9DurableFileSystem", () => {
     assert.deepEqual(client.streamPaths, ["/workspace/notes.txt"]);
   });
 
+  it("aborts an in-flight readLine on a held-open stream and cancels the reader", async () => {
+    const client = new StreamingClient();
+    // First chunk yields one complete line; then the stream is held open and
+    // never produces more — the second readLine blocks inside reader.read().
+    client.chunks = [Buffer.from("first\n")];
+    client.holdOpen = true;
+    client.addFile("/workspace/stuck.txt", "");
+    const fileSystem = createFileSystem(client);
+
+    const reader = getOrThrow(await fileSystem.openTextLineReader("stuck.txt", ctx()));
+    assert.deepEqual(getOrThrow(await reader.readLine(ctx())), { text: "first", terminated: true });
+
+    // Abort while the next read is in flight. A correct impl races the read
+    // against abort, cancels the underlying reader, and settles promptly; the
+    // pre-fix impl (no in-flight abort) hangs here forever.
+    const controller = new AbortController();
+    const pending = reader.readLine(ctx(controller.signal));
+    const guard = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1000).unref?.());
+    controller.abort();
+    const outcome = await Promise.race([pending, guard]);
+    assert.notEqual(outcome, "timeout", "readLine must settle on abort, not hang");
+    assertErrorCode(outcome as Result<unknown, { code: string }>, "aborted");
+    assert.equal(client.cancelled, true, "underlying remote reader must be cancelled on abort");
+  });
+
   it("truncates to zero bytes and refuses non-zero truncation", async () => {
     const client = new FakeClient();
     client.addFile("/workspace/data.txt", "lots of bytes");
