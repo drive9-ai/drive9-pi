@@ -302,8 +302,14 @@ A releasable head must prove:
 14. conversation creation assigns deterministic disjoint workspace identities,
     transcript forks record their exact immediate cutoff lineage without Drive9
     network work, and physical recovery still selects publication from
-    fork-visible entries rather than the copied document.
+    fork-visible entries rather than the copied document;
 15. the Pi 1.0 coordinator, durable extension, custom-tool wrapper, protocol
     errors, and referenced workspace types are importable from the package root;
     the server-fenced marker remains package-private, and the reviewed Pi 1.0
-    peer versions are pinned exactly.
+    peer versions are pinned exactly;
+16. deterministic T0–T7 protocol crash tests prove that attempt-only, dirty,
+    checkpoint-only, and candidate-only states recover from the last published
+    head; terminal success without its candidate fails closed; candidate commit
+    acknowledgement precedes tool success visibility; and the next mutation
+    starts from the recovered bytes. These tests do not replace the separate
+    real-Drive9, cross-process durability gate.
