@@ -8,7 +8,7 @@ import type {
 } from "../src/index.js";
 
 describe("public package contract", () => {
-  it("exports SDK filesystem and evidence capabilities without an execution implementation", () => {
+  it("exports SDK filesystem, file-only execution environment, and evidence capabilities", () => {
     assert.equal(typeof packageExports.createDrive9PiIntegration, "function");
     assert.equal(typeof packageExports.createDrive9FileTools, "function");
     assert.equal(typeof packageExports.createDrive9CodingAgentTools, "function");
@@ -24,6 +24,7 @@ describe("public package contract", () => {
     assert.equal(typeof packageExports.Drive9ExtensionConfigError, "function");
     assert.equal(typeof packageExports.chainAfterToolCall, "function");
     assert.equal(typeof packageExports.Drive9FileSystem, "function");
+    assert.equal(typeof packageExports.Drive9SdkExecutionEnv, "function");
     assert.equal(typeof packageExports.Drive9LayerWorkspaceBackend, "function");
     assert.equal(typeof packageExports.PersistentToolResultStore, "function");
     assert.equal(typeof packageExports.verifyRuntimeIsolation, "function");

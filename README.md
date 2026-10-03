@@ -355,6 +355,18 @@ call. Spaces and well-formed Unicode filenames remain supported.
 This adapter mutates the live Drive9 filesystem. It does not create a layer and
 does not promise branch, checkpoint, or rollback semantics.
 
+### SDK execution environment (preview)
+
+`Drive9SdkExecutionEnv` exposes the same Drive9 filesystem namespace through
+Pi 1.0's `ExecutionEnv` contract for file-only agents. Its `exec()` method
+always returns `shell_unavailable`; it never starts or falls back to a host
+process, even when callers provide a working directory, environment variables,
+or output callback.
+
+The environment remains preview until acknowledged SDK writes are proven
+immediately retrievable from another process against a real Drive9 backend.
+Use it only when an unavailable shell is the intended execution policy.
+
 ## LayerFS workspace backend (preview)
 
 The package also exports `Drive9LayerWorkspaceBackend` as a low-level Pi 1.0
