@@ -68,6 +68,15 @@ export async function recoverWorkspace(input) {
         verifier: input.verifier,
         context: input.context,
     });
+    if (published !== undefined) {
+        if (input.expectedSessionId !== undefined &&
+            published.data.sessionId !== input.expectedSessionId) {
+            throw new Drive9ProtocolError("publication_breach", "published workspace belongs to another session");
+        }
+        if (published.data.checkpoint.rootLayerId !== input.initialCheckpoint.rootLayerId) {
+            throw new Drive9ProtocolError("publication_breach", "published workspace has a different root lineage");
+        }
+    }
     const source = published?.data.checkpoint ?? input.initialCheckpoint;
     const candidateKey = published?.data.candidateKey ?? null;
     if (source.depth >= maxLayerDepth) {
