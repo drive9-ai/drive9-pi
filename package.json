@@ -61,15 +61,19 @@
     "drive9": "0.1.4"
   },
   "peerDependencies": {
+    "@earendil-works/chord": "^1.0.0",
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-durable": "^1.0.0",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
+    "@earendil-works/chord": "1.0.0",
     "@earendil-works/pi-agent-core": "0.84.1",
     "@earendil-works/pi-ai": "0.84.1",
     "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-durable": "1.0.0",
     "@earendil-works/pi-tui": "0.84.1",
     "@types/node": "24.12.4",
     "tsx": "4.22.1",
