@@ -30,6 +30,18 @@ export {
   type RuntimeIsolationReceipt,
 } from "./runtime-isolation.js";
 export {
+  Drive9LayerWorkspaceBackend,
+  type Drive9LayerBindingStore,
+  type Drive9LayerCheckpointRecord,
+  type Drive9LayerEventRecord,
+  type Drive9LayerRecord,
+  type Drive9LayerWorkspaceBackendOptions,
+  type Drive9LayerWorkspaceClient,
+  type StoredWorkspaceBinding,
+  type WorkspaceBindingSwitch,
+  type WorkspaceBindingSwitchReceipt,
+} from "./workspace/layer-backend.js";
+export {
   createAfterToolCallFallback,
   createResultReadTool,
   createResultSearchTool,

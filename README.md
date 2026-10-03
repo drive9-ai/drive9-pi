@@ -355,6 +355,26 @@ call. Spaces and well-formed Unicode filenames remain supported.
 This adapter mutates the live Drive9 filesystem. It does not create a layer and
 does not promise branch, checkpoint, or rollback semantics.
 
+## LayerFS workspace backend (preview)
+
+The package also exports `Drive9LayerWorkspaceBackend` as a low-level Pi 1.0
+workspace-coordination primitive. It is not used by the default Pi extension
+and does not change the live-filesystem semantics of `Drive9FileSystem`.
+
+The backend requires caller-provided `Drive9LayerWorkspaceClient` and
+`Drive9LayerBindingStore` implementations. It creates and verifies exact
+checkpoints, forks a writable child pinned to the published checkpoint,
+detects unpublished layer events, validates deterministic-child lineage, and
+switches the conversation binding only through the supplied fenced
+compare-and-set operation. Superseded layers are abandoned with a
+non-cascading logical delete; this is not physical checkpoint deletion.
+
+This surface is preview. It does not claim mounted quiesce plus checkpoint,
+flatten or rebase, checkpoint garbage collection, nonzero truncate, stable
+cross-process SDK acknowledgement durability, or a server-enforced writer
+epoch. Callers must fail closed when their client or binding store cannot prove
+the required checkpoint, lineage, or fencing contract.
+
 ## Evidence API
 
 `PersistentToolResultStore` stores immutable output chunks and publishes a

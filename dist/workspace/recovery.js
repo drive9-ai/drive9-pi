@@ -3,6 +3,7 @@ import { prefixedDigest } from "../core/identity.js";
 import { requireServerFencedStorage, storageProfile } from "../storage/profile.js";
 import { resolvePublishedWorkspace } from "./publication.js";
 const MAX_DIRTY_RECOVERY_CHILDREN = 16;
+const MAX_LAYER_ID_LENGTH = 50;
 function writerEpoch(input) {
     if (input.mode.kind === "stable")
         return requireServerFencedStorage(input.storage).writerEpoch;
@@ -36,7 +37,7 @@ function childIdentity(input) {
         candidateKey: input.candidateKey,
         source: input.source,
         supersedesLayerId: input.supersedesLayerId,
-    });
+    }).slice(0, MAX_LAYER_ID_LENGTH);
 }
 function verifyChild(handle, source) {
     if (handle.layerId === source.layerId ||
