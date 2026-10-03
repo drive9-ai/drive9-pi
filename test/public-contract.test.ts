@@ -25,6 +25,7 @@ describe("public package contract", () => {
     assert.equal(typeof packageExports.chainAfterToolCall, "function");
     assert.equal(typeof packageExports.Drive9FileSystem, "function");
     assert.equal(typeof packageExports.PersistentToolResultStore, "function");
+    assert.equal(typeof packageExports.verifyRuntimeIsolation, "function");
     assert.equal("Drive9ExecutionEnv" in packageExports, false);
     assert.equal("composeExecutionEnv" in packageExports, false);
     assert.equal("Drive9LayerWorkspaceRevisionProvider" in packageExports, false);

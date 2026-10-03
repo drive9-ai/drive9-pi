@@ -19,6 +19,12 @@ export {
   type EvidenceProbeClient,
 } from "./evidence-isolation.js";
 export {
+  verifyRuntimeIsolation,
+  type RuntimeIsolationOptions,
+  type RuntimeIsolationProbeClient,
+  type RuntimeIsolationReceipt,
+} from "./runtime-isolation.js";
+export {
   createAfterToolCallFallback,
   createResultReadTool,
   createResultSearchTool,

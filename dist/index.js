@@ -1,6 +1,7 @@
 export { Drive9FileSystem, } from "./drive9-file-system.js";
 export { createDrive9ResultStore, Drive9ResultStoreBackend, } from "./drive9-result-backend.js";
 export { verifyEvidenceIsolation, } from "./evidence-isolation.js";
+export { verifyRuntimeIsolation, } from "./runtime-isolation.js";
 export { createAfterToolCallFallback, createResultReadTool, createResultSearchTool, } from "./pi-adapters.js";
 export { chainAfterToolCall, createDrive9FileTools, createDrive9PiIntegration, } from "./pi-integration.js";
 export { createDrive9CodingAgentOperations, createDrive9CodingAgentTools, createDrive9StorageOnlyBashOperations, DRIVE9_STORAGE_ONLY_MESSAGE, } from "./pi-coding-agent.js";
