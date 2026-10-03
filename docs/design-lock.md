@@ -20,6 +20,11 @@ operations with Drive9 operations while users keep the ordinary `pi` install
 and startup flow. In Drive9 mode, host process tools fail closed rather than
 operating in a different filesystem world.
 
+For Pi 1.0, the package also exports a preview `Drive9SdkExecutionEnv`. It is
+the same SDK-backed filesystem namespace plus a Shell implementation that
+always returns typed `shell_unavailable`; it is not a command runner or a host
+fallback.
+
 `createDrive9PiIntegration` remains a lower-level agent-core preset. It binds
 Pi's harness read/write/edit/list tools to a private file-only environment,
 installs the evidence tools and fallback, and returns complete `AgentOptions`
@@ -64,6 +69,21 @@ durability and fencing contracts. In particular, it does not claim:
 - checkpoint deletion or orphan garbage collection;
 - nonzero truncate support; or
 - a storage implementation with a server-enforced writer epoch.
+
+### 1.2 Pi 1.0 SDK Execution Environment Preview Contract
+
+`Drive9SdkExecutionEnv` implements Pi 1.0's public `ExecutionEnv` without
+inventing compute:
+
+- every filesystem operation is inherited from `Drive9DurableFileSystem`;
+- `ExecutionEnv.id` is the exact Drive9 filesystem namespace identity;
+- `exec()` returns `shell_unavailable` and never starts or inherits a host
+  process; and
+- an already-aborted context returns `aborted` before any other result.
+
+This environment remains preview until real-backend tests prove that every
+acknowledged SDK write or append is immediately retrievable from another
+process. The class does not make the direct-SDK durability profile stable.
 
 ## 2. `Drive9FileSystem`
 
@@ -229,4 +249,7 @@ A releasable head must prove:
     rejects dirty or mismatched recovery children, reconciles only exact
     deterministic-create conflicts, validates fenced binding receipts, uses
     non-cascading logical abandon, and keeps generated layer IDs within the
-    server contract.
+    server contract;
+12. the preview SDK execution environment shares the filesystem namespace id,
+    returns typed `shell_unavailable` for every command without invoking a
+    process, and preserves cancellation precedence.

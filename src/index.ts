@@ -11,6 +11,10 @@ export {
   type Drive9DurableFileSystemOptions,
 } from "./drive9-durable-file-system.js";
 export {
+  Drive9SdkExecutionEnv,
+  type Drive9SdkExecutionEnvOptions,
+} from "./environment/sdk-environment.js";
+export {
   createDrive9ResultStore,
   Drive9ResultStoreBackend,
   type CreateDrive9ResultStoreOptions,
