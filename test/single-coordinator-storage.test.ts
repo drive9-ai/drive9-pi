@@ -252,4 +252,17 @@ describe("Drive9 single-coordinator storage", () => {
     await assert.rejects(openStorage(client), /not found/);
     assert.equal(client.nodes.size, 0);
   });
+
+  it("fails closed when crash recovery requires unavailable nonzero truncate", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-5/state");
+    const storage = await openStorage(client);
+    await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+    await storage.close(context);
+
+    await client.append(`${client.root}/main.jsonl`, Buffer.from('{"torn":', "utf8"));
+    await assert.rejects(
+      openStorage(client),
+      /torn-line truncation of main\.jsonl failed: Drive9 has no native truncate-to-size primitive/,
+    );
+  });
 });

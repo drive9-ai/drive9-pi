@@ -383,6 +383,10 @@ session writers, and is rejected by stable Drive9 publication mode. Use
 `storageProfile()` to inspect that machine-readable
 `single-coordinator-preview` classification. A stable multi-process adapter
 still requires a server-enforced writer epoch on every Pi storage commit.
+Because Drive9 does not yet expose nonzero truncate, a process crash that
+leaves a partial JSONL tail after earlier committed records fails closed on
+reopen and can require operator repair; this preview does not promise automatic
+crash-tail recovery.
 
 ### SDK execution environment (preview)
 

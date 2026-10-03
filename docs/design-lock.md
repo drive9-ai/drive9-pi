@@ -99,6 +99,12 @@ automatic lease-expiry takeover, or promotion to stable recovery. Stable
 construction must reject it because Drive9 filesystem appends do not carry a
 server-enforced writer epoch coupled to every Pi commit.
 
+Drive9 also lacks nonzero truncate. Pi JSONL recovery can trim an empty orphan
+tail with truncate-to-zero, but a torn or unconfirmed tail after existing
+records may require nonzero truncation. The adapter fails closed in that state;
+this preview can require operator repair and does not claim automatic crash-tail
+recovery.
+
 The state root is separate from the model-visible coding workspace. Runtime
 composition must additionally run `verifyRuntimeIsolation` for the concrete
 workspace, state, and evidence credentials before exposing those authorities.
@@ -273,4 +279,5 @@ A releasable head must prove:
     process, and preserves cancellation precedence;
 13. the preview JSONL storage passes Pi `StorageConformance`, reopens committed
     state, exposes `single-coordinator-preview`, requires explicit external
-    exclusivity, and remains rejected by stable publication construction.
+    exclusivity, remains rejected by stable publication construction, and
+    fails closed when recovery needs the unavailable nonzero truncate primitive.
