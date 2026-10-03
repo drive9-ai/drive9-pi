@@ -70,6 +70,7 @@ async function fixture(options?: {
   resultIsError?: boolean;
   outcome?: "completed" | "failed";
   duplicateCandidate?: "identical" | "conflict";
+  plan?: WorkspaceMutationPlan;
 }): Promise<Fixture> {
   const storage = new MemoryStorage();
   const conversationId = await storage.mintId<ConversationId>();
@@ -79,21 +80,22 @@ async function fixture(options?: {
   const candidateId = await storage.mintId<EntryId>();
   const duplicateId = options?.duplicateCandidate === undefined ? undefined : await storage.mintId<EntryId>();
   const resultId = await storage.mintId<EntryId>();
+  const mutationPlan = options?.plan ?? plan;
   const attempt = buildWorkspaceAttemptData({
     conversationId: Number(conversationId),
     taskId: Number(taskId),
     toolCallId: "call-1",
     effect: "workspace",
-    plan,
+    plan: mutationPlan,
   });
   const checkpoint: VerifiedWorkspaceCheckpoint = {
     checkpointId: deriveWorkspaceCandidateKey(attempt, attemptId),
     durableSeq: 42,
-    layerId: plan.workspace.layerId,
-    rootLayerId: plan.workspace.rootLayerId,
-    parentLayerId: plan.workspace.parentLayerId,
-    parentCheckpointId: plan.workspace.parentCheckpointId,
-    depth: plan.workspace.depth,
+    layerId: mutationPlan.workspace.layerId,
+    rootLayerId: mutationPlan.workspace.rootLayerId,
+    parentLayerId: mutationPlan.workspace.parentLayerId,
+    parentCheckpointId: mutationPlan.workspace.parentCheckpointId,
+    depth: mutationPlan.workspace.depth,
   };
   const candidate = buildWorkspaceCandidateData({ attempt, attemptId, checkpoint });
   const duplicateCandidate =
@@ -200,27 +202,38 @@ function unreachableRecoveryBackend(): WorkspaceRecoveryBackend {
 async function appendPublishedSuccess(
   value: Fixture,
   previous: PublishedWorkspaceRef,
+  options?: {
+    readonly conversationId?: ConversationId;
+    readonly toolCallId?: string;
+    readonly layerId?: string;
+    readonly parentLayerId?: string;
+    readonly parentCheckpointId?: string;
+    readonly depth?: number;
+    readonly durableSeq?: number;
+  },
 ): Promise<{ candidateId: EntryId; candidate: WorkspaceCandidateData }> {
   const taskId = await value.storage.mintId<TaskId<JsonValue>>();
   const attemptId = await value.storage.mintId<EntryId>();
   const candidateId = await value.storage.mintId<EntryId>();
   const resultId = await value.storage.mintId<EntryId>();
+  const conversationId = options?.conversationId ?? value.conversationId;
+  const toolCallId = options?.toolCallId ?? "call-2";
   const nextPlan: WorkspaceMutationPlan = {
     ...plan,
     workspace: {
-      layerId: "layer-2",
+      layerId: options?.layerId ?? "layer-2",
       rootLayerId: plan.workspace.rootLayerId,
-      parentLayerId: plan.workspace.layerId,
-      parentCheckpointId: value.candidate.checkpoint.checkpointId,
-      depth: plan.workspace.depth + 1,
-      executionEnvId: "drive9-layer:layer-2",
+      parentLayerId: options?.parentLayerId ?? plan.workspace.layerId,
+      parentCheckpointId: options?.parentCheckpointId ?? value.candidate.checkpoint.checkpointId,
+      depth: options?.depth ?? plan.workspace.depth + 1,
+      executionEnvId: `drive9-layer:${options?.layerId ?? "layer-2"}`,
     },
     previous,
   };
   const attempt = buildWorkspaceAttemptData({
-    conversationId: Number(value.conversationId),
+    conversationId: Number(conversationId),
     taskId: Number(taskId),
-    toolCallId: "call-2",
+    toolCallId,
     effect: "workspace",
     plan: nextPlan,
   });
@@ -229,7 +242,7 @@ async function appendPublishedSuccess(
     attemptId,
     checkpoint: {
       checkpointId: deriveWorkspaceCandidateKey(attempt, attemptId),
-      durableSeq: 84,
+      durableSeq: options?.durableSeq ?? 84,
       layerId: nextPlan.workspace.layerId,
       rootLayerId: nextPlan.workspace.rootLayerId,
       parentLayerId: nextPlan.workspace.parentLayerId,
@@ -242,7 +255,7 @@ async function appendPublishedSuccess(
       type: "entry",
       value: {
         id: attemptId,
-        conversationId: value.conversationId,
+        conversationId,
         kind: WorkspaceAttemptEntry.kind,
         data: attempt,
         byTaskId: taskId,
@@ -252,7 +265,7 @@ async function appendPublishedSuccess(
       type: "entry",
       value: {
         id: candidateId,
-        conversationId: value.conversationId,
+        conversationId,
         kind: WorkspaceCandidateEntry.kind,
         data: candidate,
         byTaskId: taskId,
@@ -262,12 +275,12 @@ async function appendPublishedSuccess(
       type: "entry",
       value: {
         id: resultId,
-        conversationId: value.conversationId,
+        conversationId,
         kind: "pi.tool-result",
         model: [
           {
             role: "toolResult",
-            toolCallId: "call-2",
+            toolCallId,
             toolName: "write",
             content: [],
             isError: false,
@@ -282,10 +295,10 @@ async function appendPublishedSuccess(
       type: "task",
       value: {
         id: taskId,
-        conversationId: value.conversationId,
+        conversationId,
         kind: "pi.tool",
         version: 1,
-        input: { assistant: 1000, callId: "call-2" },
+        input: { assistant: 1000, callId: toolCallId },
         background: false,
         abortRequested: false,
         state: { status: "terminal", outcome: { status: "completed", result: { entryId: resultId } } },
@@ -307,6 +320,43 @@ test("publishes the newest successful matching candidate", async () => {
   assert.equal(published?.attemptEntryId, value.attemptId);
   assert.equal(published?.resultEntryId, value.resultId);
   assert.equal(published?.data.candidateKey, value.candidate.candidateKey);
+});
+
+test("same Pi attempt identity publishes a generation-specific checkpoint", async () => {
+  const nextPlan: WorkspaceMutationPlan = {
+    ...plan,
+    workspace: {
+      layerId: "layer-recovered",
+      rootLayerId: plan.workspace.rootLayerId,
+      parentLayerId: plan.workspace.layerId,
+      parentCheckpointId: "checkpoint-before-recovery",
+      depth: plan.workspace.depth + 1,
+      executionEnvId: "drive9-layer:layer-recovered",
+    },
+  };
+  const beforeRecovery = await fixture({ plan });
+  const afterRecovery = await fixture({ plan: nextPlan });
+  assert.equal(Number(beforeRecovery.conversationId), Number(afterRecovery.conversationId));
+  assert.equal(Number(beforeRecovery.taskId), Number(afterRecovery.taskId));
+  assert.equal(Number(beforeRecovery.attemptId), Number(afterRecovery.attemptId));
+  assert.notEqual(beforeRecovery.candidate.candidateKey, afterRecovery.candidate.candidateKey);
+
+  const beforePublished = await resolvePublishedWorkspace({
+    storage: beforeRecovery.storage,
+    conversationId: beforeRecovery.conversationId,
+    verifier: verifier(),
+    context: BACKGROUND_CONTEXT,
+  });
+  const afterPublished = await resolvePublishedWorkspace({
+    storage: afterRecovery.storage,
+    conversationId: afterRecovery.conversationId,
+    verifier: verifier(),
+    context: BACKGROUND_CONTEXT,
+  });
+  assert.equal(beforePublished?.data.candidateKey, beforeRecovery.candidate.candidateKey);
+  assert.equal(afterPublished?.data.candidateKey, afterRecovery.candidate.candidateKey);
+  assert.equal(beforePublished?.data.checkpoint.layerId, plan.workspace.layerId);
+  assert.equal(afterPublished?.data.checkpoint.layerId, nextPlan.workspace.layerId);
 });
 
 test("recovery rejects a published candidate from another session before changing workspace state", async () => {
@@ -576,6 +626,47 @@ test("a fork cutoff before the terminal result does not inherit the candidate", 
     context: BACKGROUND_CONTEXT,
   });
   assert.equal(child, undefined);
+  const initialCheckpoint: VerifiedWorkspaceCheckpoint = {
+    checkpointId: "checkpoint-initial",
+    durableSeq: 0,
+    layerId: plan.workspace.rootLayerId,
+    rootLayerId: plan.workspace.rootLayerId,
+    parentLayerId: null,
+    parentCheckpointId: null,
+    depth: 0,
+  };
+  const forkedSources: VerifiedWorkspaceCheckpoint[] = [];
+  const recovered = await recoverWorkspace({
+    storage: value.storage,
+    conversationId: childId,
+    initialCheckpoint,
+    verifier: verifier(),
+    backend: {
+      currentBinding: async () => undefined,
+      forkFromCheckpoint: async (input) => {
+        forkedSources.push(input.source);
+        return {
+          handle: {
+            layerId: input.childIdentity,
+            rootLayerId: input.source.rootLayerId,
+            parentLayerId: input.source.layerId,
+            parentCheckpointId: input.source.checkpointId,
+            sourceCheckpointId: input.source.checkpointId,
+            depth: input.source.depth + 1,
+            executionEnvId: `drive9-layer:${input.childIdentity}`,
+          },
+          hasUnpublishedWrites: false,
+        };
+      },
+      switchBinding: async () => undefined,
+      abandon: async () => undefined,
+    },
+    context: BACKGROUND_CONTEXT,
+    maxLayerDepth: 16,
+    mode: { kind: "single-coordinator-preview", writerEpoch: "epoch-child" },
+  });
+  assert.equal(recovered.published, undefined);
+  assert.deepEqual(forkedSources, [initialCheckpoint]);
   const parent = await resolvePublishedWorkspace({
     storage: value.storage,
     conversationId: value.conversationId,
@@ -583,6 +674,126 @@ test("a fork cutoff before the terminal result does not inherit the candidate", 
     context: BACKGROUND_CONTEXT,
   });
   assert.equal(parent?.data.candidateKey, value.candidate.candidateKey);
+});
+
+test("a child recovery forks from the published head at its transcript cutoff", async () => {
+  const value = await fixture();
+  const childId = await value.storage.mintId<ConversationId>();
+  await commit(value.storage, [
+    {
+      type: "conversation",
+      value: {
+        id: childId,
+        parent: { conversationId: value.conversationId, at: value.resultId },
+      },
+    },
+  ]);
+  const later = await appendPublishedSuccess(value, publishedRef(value.candidate));
+  const forkedSources: VerifiedWorkspaceCheckpoint[] = [];
+  const switchedConversations: number[] = [];
+  const backend: WorkspaceRecoveryBackend = {
+    currentBinding: async () => undefined,
+    forkFromCheckpoint: async (input) => {
+      forkedSources.push(input.source);
+      return {
+        handle: {
+          layerId: input.childIdentity,
+          rootLayerId: input.source.rootLayerId,
+          parentLayerId: input.source.layerId,
+          parentCheckpointId: input.source.checkpointId,
+          sourceCheckpointId: input.source.checkpointId,
+          depth: input.source.depth + 1,
+          executionEnvId: `drive9-layer:${input.childIdentity}`,
+        },
+        hasUnpublishedWrites: false,
+      };
+    },
+    switchBinding: async (input) => {
+      switchedConversations.push(Number(input.conversationId));
+    },
+    abandon: async () => undefined,
+  };
+  const initialCheckpoint: VerifiedWorkspaceCheckpoint = {
+    checkpointId: "checkpoint-initial",
+    durableSeq: 0,
+    layerId: plan.workspace.rootLayerId,
+    rootLayerId: plan.workspace.rootLayerId,
+    parentLayerId: null,
+    parentCheckpointId: null,
+    depth: 0,
+  };
+
+  const child = await recoverWorkspace({
+    storage: value.storage,
+    conversationId: childId,
+    initialCheckpoint,
+    verifier: verifier(),
+    backend,
+    context: BACKGROUND_CONTEXT,
+    maxLayerDepth: 16,
+    mode: { kind: "single-coordinator-preview", writerEpoch: "epoch-child" },
+  });
+  const parent = await recoverWorkspace({
+    storage: value.storage,
+    conversationId: value.conversationId,
+    initialCheckpoint,
+    verifier: verifier(),
+    backend,
+    context: BACKGROUND_CONTEXT,
+    maxLayerDepth: 16,
+    mode: { kind: "single-coordinator-preview", writerEpoch: "epoch-parent" },
+  });
+
+  assert.equal(child.published?.data.candidateKey, value.candidate.candidateKey);
+  assert.equal(parent.published?.data.candidateKey, later.candidate.candidateKey);
+  assert.deepEqual(forkedSources, [value.candidate.checkpoint, later.candidate.checkpoint]);
+  assert.deepEqual(switchedConversations, [Number(childId), Number(value.conversationId)]);
+});
+
+test("parent and child publication chains diverge after the transcript fork", async () => {
+  const value = await fixture();
+  const childId = await value.storage.mintId<ConversationId>();
+  await commit(value.storage, [
+    {
+      type: "conversation",
+      value: {
+        id: childId,
+        parent: { conversationId: value.conversationId, at: value.resultId },
+      },
+    },
+  ]);
+  const forkHead = publishedRef(value.candidate);
+  const parentLater = await appendPublishedSuccess(value, forkHead);
+  const childLater = await appendPublishedSuccess(value, forkHead, {
+    conversationId: childId,
+    toolCallId: "call-child",
+    layerId: "layer-child",
+    parentLayerId: value.candidate.checkpoint.layerId,
+    parentCheckpointId: value.candidate.checkpoint.checkpointId,
+    depth: value.candidate.checkpoint.depth + 1,
+    durableSeq: 126,
+  });
+
+  const parent = await resolvePublishedWorkspace({
+    storage: value.storage,
+    conversationId: value.conversationId,
+    verifier: verifier(),
+    context: BACKGROUND_CONTEXT,
+  });
+  const child = await resolvePublishedWorkspace({
+    storage: value.storage,
+    conversationId: childId,
+    verifier: verifier(),
+    context: BACKGROUND_CONTEXT,
+  });
+
+  assert.equal(parent?.data.candidateKey, parentLater.candidate.candidateKey);
+  assert.equal(child?.data.candidateKey, childLater.candidate.candidateKey);
+  assert.notEqual(parent?.data.candidateKey, child?.data.candidateKey);
+  assert.deepEqual(parent?.data.previous, forkHead);
+  assert.deepEqual(child?.data.previous, forkHead);
+  assert.equal(parent?.data.checkpoint.layerId, "layer-2");
+  assert.equal(child?.data.checkpoint.layerId, "layer-child");
 });
 
 test("fails closed when Drive9 verifies different checkpoint lineage", async () => {

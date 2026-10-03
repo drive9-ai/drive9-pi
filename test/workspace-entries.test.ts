@@ -42,6 +42,33 @@ test("derives a deterministic checkpoint-safe candidate identity", () => {
   assert.equal(Buffer.byteLength(first, "utf8"), 64);
 });
 
+test("binds candidate identity to the physical workspace generation", () => {
+  const firstGeneration = attempt();
+  const nextPlan: WorkspaceMutationPlan = {
+    ...plan,
+    workspace: {
+      layerId: "layer-2",
+      rootLayerId: plan.workspace.rootLayerId,
+      parentLayerId: plan.workspace.layerId,
+      parentCheckpointId: "checkpoint-1",
+      depth: plan.workspace.depth + 1,
+      executionEnvId: "drive9-layer:layer-2",
+    },
+  };
+  const nextGeneration = buildWorkspaceAttemptData({
+    conversationId: firstGeneration.conversationId,
+    taskId: firstGeneration.taskId,
+    toolCallId: firstGeneration.toolCallId,
+    effect: firstGeneration.effect,
+    plan: nextPlan,
+  });
+
+  assert.notEqual(
+    deriveWorkspaceCandidateKey(firstGeneration, 11),
+    deriveWorkspaceCandidateKey(nextGeneration, 11),
+  );
+});
+
 test("round-trips an integrity-bound candidate", () => {
   const value = attempt();
   const checkpointId = deriveWorkspaceCandidateKey(value, 11);

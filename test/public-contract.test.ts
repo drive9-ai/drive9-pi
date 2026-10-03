@@ -29,6 +29,10 @@ describe("public package contract", () => {
     assert.equal(typeof packageExports.storageProfile, "function");
     assert.equal(typeof packageExports.requireServerFencedStorage, "function");
     assert.equal(typeof packageExports.Drive9LayerWorkspaceBackend, "function");
+    assert.equal(typeof packageExports.createDrive9ConversationCreated, "function");
+    assert.equal(typeof packageExports.deriveDrive9WorkspaceId, "function");
+    assert.equal(typeof packageExports.Drive9WorkspaceDoc, "object");
+    assert.equal(typeof packageExports.readDrive9WorkspaceDocument, "function");
     assert.equal(typeof packageExports.PersistentToolResultStore, "function");
     assert.equal(typeof packageExports.verifyRuntimeIsolation, "function");
     assert.equal("Drive9ExecutionEnv" in packageExports, false);

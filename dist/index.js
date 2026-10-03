@@ -7,6 +7,7 @@ export { createDrive9ResultStore, Drive9ResultStoreBackend, } from "./drive9-res
 export { verifyEvidenceIsolation, } from "./evidence-isolation.js";
 export { verifyRuntimeIsolation, } from "./runtime-isolation.js";
 export { Drive9LayerWorkspaceBackend, } from "./workspace/layer-backend.js";
+export { createDrive9ConversationCreated, deriveDrive9WorkspaceId, Drive9WorkspaceDoc, parseDrive9WorkspaceDocument, readDrive9WorkspaceDocument, DRIVE9_WORKSPACE_DOCUMENT_VERSION, } from "./workspace/conversations.js";
 export { createAfterToolCallFallback, createResultReadTool, createResultSearchTool, } from "./pi-adapters.js";
 export { chainAfterToolCall, createDrive9FileTools, createDrive9PiIntegration, } from "./pi-integration.js";
 export { createDrive9CodingAgentOperations, createDrive9CodingAgentTools, createDrive9StorageOnlyBashOperations, DRIVE9_STORAGE_ONLY_MESSAGE, } from "./pi-coding-agent.js";
