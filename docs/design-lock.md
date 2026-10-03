@@ -109,6 +109,24 @@ The state root is separate from the model-visible coding workspace. Runtime
 composition must additionally run `verifyRuntimeIsolation` for the concrete
 workspace, state, and evidence credentials before exposing those authorities.
 
+### 1.4 Pi 1.0 Conversation Workspace Lineage
+
+Every Pi 1.0 conversation receives a rewindable `drive9.workspace` document
+through `createDrive9ConversationCreated`. Root and independent conversations
+receive deterministic, disjoint workspace identities. A transcript fork gets a
+new workspace identity while recording the immediate parent conversation,
+inclusive fork entry, parent workspace identity, and inherited root workspace
+identity.
+
+The creation hook performs no Drive9 network work on Pi's commit line. The V1
+document is lineage metadata only: it has no checkpoint or reconciled-head
+field and is never publication authority.
+The authoritative workspace head for a child is still selected from terminal
+successful tool results and matching candidates visible through the child's Pi
+ancestry at its exact fork cutoff. Writable recovery then forks LayerFS from
+that verified checkpoint; a child never uses the parent's physical latest head
+merely because the document was copied.
+
 ## 2. `Drive9FileSystem`
 
 `Drive9FileSystem implements FileSystem` using the ordinary Drive9 SDK. It
@@ -280,4 +298,8 @@ A releasable head must prove:
 13. the preview JSONL storage passes Pi `StorageConformance`, reopens committed
     state, exposes `single-coordinator-preview`, requires explicit external
     exclusivity, remains rejected by stable publication construction, and
-    fails closed when recovery needs the unavailable nonzero truncate primitive.
+    fails closed when recovery needs the unavailable nonzero truncate primitive;
+14. conversation creation assigns deterministic disjoint workspace identities,
+    transcript forks record their exact immediate cutoff lineage without Drive9
+    network work, and physical recovery still selects publication from
+    fork-visible entries rather than the copied document.

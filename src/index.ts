@@ -55,6 +55,17 @@ export {
   type WorkspaceBindingSwitchReceipt,
 } from "./workspace/layer-backend.js";
 export {
+  createDrive9ConversationCreated,
+  deriveDrive9WorkspaceId,
+  Drive9WorkspaceDoc,
+  parseDrive9WorkspaceDocument,
+  readDrive9WorkspaceDocument,
+  DRIVE9_WORKSPACE_DOCUMENT_VERSION,
+  type Drive9ConversationCreatedOptions,
+  type Drive9WorkspaceDocument,
+  type Drive9WorkspaceParent,
+} from "./workspace/conversations.js";
+export {
   createAfterToolCallFallback,
   createResultReadTool,
   createResultSearchTool,

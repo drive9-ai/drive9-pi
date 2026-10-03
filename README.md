@@ -420,6 +420,34 @@ cross-process SDK acknowledgement durability, or a server-enforced writer
 epoch. Callers must fail closed when their client or binding store cannot prove
 the required checkpoint, lineage, or fencing contract.
 
+### Conversation workspace lineage (preview)
+
+`createDrive9ConversationCreated()` is a Pi 1.0 `conversationCreated` hook for
+durable workspace identity. It creates a rewindable `drive9.workspace`
+document for every conversation. A transcript fork receives a new deterministic
+workspace ID and records its immediate parent conversation, exact inclusive
+entry cutoff, parent workspace ID, and inherited root workspace ID.
+
+The hook performs no Drive9 network provisioning while Pi holds its commit
+line. Physical workspace creation remains lazy: the first recovery or mutating
+tool resolves the newest published candidate through Pi's fork-visible entries
+and forks a writable LayerFS generation from that exact checkpoint. The
+document records lineage and supports lookup; it is not publication proof and
+must never replace the entry/task/checkpoint publication predicate. The V1
+document intentionally contains no checkpoint or reconciled-head field.
+
+```ts
+const harness = await Harness.open(
+  storage,
+  {
+    models,
+    registry,
+    conversationCreated: createDrive9ConversationCreated({ sessionId }),
+  },
+  context,
+);
+```
+
 ## Evidence API
 
 `PersistentToolResultStore` stores immutable output chunks and publishes a
