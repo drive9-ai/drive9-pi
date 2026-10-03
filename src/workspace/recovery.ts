@@ -12,6 +12,7 @@ import type {
 } from "./types.js";
 
 const MAX_DIRTY_RECOVERY_CHILDREN = 16;
+const MAX_LAYER_ID_LENGTH = 50;
 
 export type WritableWorkspaceHandle = WorkspaceGeneration & {
   readonly sourceCheckpointId: string;
@@ -117,7 +118,7 @@ function childIdentity(input: {
     candidateKey: input.candidateKey,
     source: input.source,
     supersedesLayerId: input.supersedesLayerId,
-  } as JsonValue);
+  } as JsonValue).slice(0, MAX_LAYER_ID_LENGTH);
 }
 
 function verifyChild(handle: WritableWorkspaceHandle, source: VerifiedWorkspaceCheckpoint): void {

@@ -193,6 +193,8 @@ test("repeated recovery forks siblings from one published checkpoint", async () 
   });
   assert.equal(backend.forkInputs.length, 2);
   assert.deepEqual(backend.forkInputs.map((input) => input.source), [source, source]);
+  assert.equal(backend.forkInputs.every((input) => input.childIdentity.length <= 50), true);
+  assert.equal(backend.forkInputs.every((input) => input.childIdentity.startsWith("pir_")), true);
   assert.equal(dirtyChild.depth, cleanSibling.depth);
   assert.notEqual(backend.forkInputs[0]?.childIdentity, backend.forkInputs[1]?.childIdentity);
   assert.equal(recovered.binding.handle, cleanSibling);

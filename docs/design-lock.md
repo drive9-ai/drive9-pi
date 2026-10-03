@@ -1,8 +1,14 @@
 # Pi × Drive9 Design Lock
 
-## 1. V1 Product Contract
+This document locks two separate surfaces. The existing Pi 0.x-compatible
+extension and live-filesystem adapter remain the default public path. The Pi
+1.0 LayerFS workspace backend is an explicit low-level preview surface; it does
+not change the default extension or promote the missing durability primitives
+listed below to stable support.
 
-Drive9 provides two capabilities to Pi:
+## 1. Product Contract
+
+The default Pi 0.x-compatible extension provides two capabilities:
 
 1. a durable SDK-backed filesystem;
 2. a durable tool-result evidence store.
@@ -22,10 +28,42 @@ supplies a `Shell`; explicit additional harness tools can then use only that
 shell. The package never creates or falls back to a host shell. The application
 continues to own execution.
 
-V1 deliberately does not use LayerFS. `Drive9FileSystem` mutates the live
-Drive9 filesystem through ordinary SDK methods and does not expose a `layerId`,
-checkpoint, branch, commit, or rollback contract. LayerFS may be added later as
-a separate optional adapter after a concrete product workflow requires it.
+The default extension deliberately does not use LayerFS. `Drive9FileSystem`
+mutates the live Drive9 filesystem through ordinary SDK methods and does not
+expose a `layerId`, checkpoint, branch, commit, or rollback contract.
+
+Pi 1.0 durable workspace coordination is a separate preview surface. The
+package exports `Drive9LayerWorkspaceBackend` for a caller that supplies both a
+LayerFS client and a fenced binding store. This backend does not replace
+`Drive9FileSystem`, and it is not activated by the default Pi extension.
+
+### 1.1 Pi 1.0 LayerFS Preview Contract
+
+The preview backend implements restore-by-fork rather than in-place rollback:
+
+1. create and independently read an exact checkpoint;
+2. re-read the published source checkpoint before recovery;
+3. fork a deterministic writable child pinned to that checkpoint;
+4. accept an existing child only when its root, parent, checkpoint, and depth
+   exactly match the requested lineage;
+5. detect unpublished writes from layer-local events;
+6. switch the conversation binding only through a caller-supplied fenced
+   compare-and-set operation and verify its receipt; and
+7. abandon superseded layers with non-cascading logical delete.
+
+The backend never treats the latest physical checkpoint as published truth,
+never rolls a dirty child forward, and never describes logical abandon as
+physical checkpoint deletion.
+
+This surface remains preview until the surrounding runtime proves all required
+durability and fencing contracts. In particular, it does not claim:
+
+- atomic mounted quiesce plus checkpoint;
+- stable direct-SDK acknowledgement durability across another process;
+- flatten or rebase for bounded LayerFS depth;
+- checkpoint deletion or orphan garbage collection;
+- nonzero truncate support; or
+- a storage implementation with a server-enforced writer epoch.
 
 ## 2. `Drive9FileSystem`
 
@@ -62,10 +100,10 @@ Paths are normalized to Drive9's NFC namespace before containment and canonical
 identity checks. Characters that the locked Drive9 SDK cannot safely preserve
 through URL construction fail closed before a client method is called.
 
-### 2.2 Explicit Non-Goals
+### 2.2 `Drive9FileSystem` Explicit Non-Goals
 
-- no active layer creation;
-- no workspace checkpoint or rollback;
+- no active layer creation through this adapter;
+- no workspace checkpoint or rollback through this adapter;
 - no transparent capture of arbitrary shell side effects;
 - no host shell fallback;
 - no local mirror or mount lifecycle.
@@ -89,7 +127,9 @@ must append chunks through `ToolResultStore` before publishing the reference.
 ## 4. Security and Failure Rules
 
 - No built-in shell, host environment inheritance, or implicit local process.
-- No FUSE, WebDAV, LayerFS, or mount requirement for filesystem operations.
+- No FUSE, WebDAV, LayerFS, or mount requirement for `Drive9FileSystem`
+  operations. The separate preview workspace backend requires LayerFS by
+  definition.
 - Path escape is rejected before a client method is called.
 - URL delimiters, percent escapes, controls, malformed Unicode, and backslashes
   that could change the locked SDK's request target are rejected consistently
@@ -179,8 +219,14 @@ A releasable head must prove:
    delegates explicit harness tools only to a supplied shell;
 9. README leads with a currently usable standard `pi install` path, setup and
    one-shot configuration, provides copyable SDK configuration, and does not
-   claim shell execution, branch, checkpoint, or rollback semantics;
+   claim shell execution, branch, checkpoint, or rollback semantics for the
+   default extension or `Drive9FileSystem`;
 10. trusted project configuration, command-driven setup/status/disable/verify,
     footer state, tool ownership conflicts, active-tool selection, headless
     fail-closed behavior, package build output, and a real Pi Git install have
-    discriminating regression coverage.
+    discriminating regression coverage;
+11. the preview LayerFS backend verifies exact checkpoint identity and lineage,
+    rejects dirty or mismatched recovery children, reconciles only exact
+    deterministic-create conflicts, validates fenced binding receipts, uses
+    non-cascading logical abandon, and keeps generated layer IDs within the
+    server contract.
