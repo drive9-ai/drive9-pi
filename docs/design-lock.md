@@ -303,3 +303,7 @@ A releasable head must prove:
     transcript forks record their exact immediate cutoff lineage without Drive9
     network work, and physical recovery still selects publication from
     fork-visible entries rather than the copied document.
+15. the Pi 1.0 coordinator, durable extension, custom-tool wrapper, protocol
+    errors, and referenced workspace types are importable from the package root;
+    the server-fenced marker remains package-private, and the reviewed Pi 1.0
+    peer versions are pinned exactly.
