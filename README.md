@@ -487,6 +487,14 @@ package-owned adapter whose write path actually enforces the writer epoch on
 every commit. The public Pi 1.0 peer contract pins `pi-durable` and Chord to the
 exact reviewed `1.0.0` versions.
 
+The test suite includes a deterministic T0–T7 protocol crash matrix. It proves
+that incomplete attempts, dirty generations, orphan checkpoints, and orphan
+candidates never become the next mutation's baseline; a terminal success with
+no matching durable candidate fails closed; and tool success cannot become
+visible before candidate commit acknowledgement. This is a state-machine test,
+not proof of Drive9 transport durability. Stable SDK publication remains gated
+on the separate real-backend, another-process recovery tests described above.
+
 ## Evidence API
 
 `PersistentToolResultStore` stores immutable output chunks and publishes a
