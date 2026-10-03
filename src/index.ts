@@ -6,6 +6,11 @@ export {
   type Drive9Stat,
 } from "./drive9-file-system.js";
 export {
+  Drive9DurableFileSystem,
+  type Drive9DurableFileSystemClient,
+  type Drive9DurableFileSystemOptions,
+} from "./drive9-durable-file-system.js";
+export {
   createDrive9ResultStore,
   Drive9ResultStoreBackend,
   type CreateDrive9ResultStoreOptions,
