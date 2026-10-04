@@ -479,9 +479,16 @@ This API never deletes a checkpoint, layer, candidate, or evidence object.
 `permanently-unpublishable` means only that the owning Pi task can no longer
 publish the candidate; it is not proof that no historical fork references its
 checkpoint. Candidate inventory also cannot discover a physical checkpoint
-created before its candidate record became durable. Drive9 currently has no
-reference-aware physical checkpoint deletion contract, so all reported and
-undiscovered orphans remain retained.
+created before its candidate record became durable.
+
+A separate `reclaimOrphanLayers` API performs reference-aware orphan *layer* GC:
+it reclaims only layers the inventory proved permanently unpublishable and that
+no other layer references as a fork parent (reference index built from the full
+`listFSLayers()` list), deletes non-cascading, treats a server `still_pins`/409
+as still-referenced, and fails closed rather than deleting without that proof.
+There is still no reference-aware physical *checkpoint* deletion contract, so
+checkpoints without a durable candidate record, and any orphan a pass
+conservatively skips, remain retained.
 
 ### Conversation workspace lineage (preview)
 
