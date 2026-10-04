@@ -115,11 +115,14 @@ automatic lease-expiry takeover, or promotion to stable recovery. Stable
 construction must reject it because Drive9 filesystem appends do not carry a
 server-enforced writer epoch coupled to every Pi commit.
 
-Drive9 also lacks nonzero truncate. Pi JSONL recovery can trim an empty orphan
-tail with truncate-to-zero, but a torn or unconfirmed tail after existing
-records may require nonzero truncation. The adapter fails closed in that state;
-this preview can require operator repair and does not claim automatic crash-tail
-recovery.
+This adapter's SDK/HTTP profile also exposes no public truncate-to-N primitive.
+(The Drive9 server truncates to an arbitrary length at its JuiceFS metadata
+layer, reached over a FUSE mount via the VFS `SetAttr`/`FATTR_SIZE` path; that
+is a separate ExecutionEnv, not this adapter's SDK/HTTP surface.) Pi JSONL
+recovery can trim an empty orphan tail with truncate-to-zero, but a torn or
+unconfirmed tail after existing records may require nonzero truncation. On this
+profile the adapter fails closed in that state; this preview can require operator
+repair and does not claim automatic crash-tail recovery.
 
 The state root is separate from the model-visible coding workspace. Runtime
 composition must additionally run `verifyRuntimeIsolation` for the concrete

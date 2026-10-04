@@ -555,8 +555,23 @@ describe("Drive9DurableFileSystem", () => {
     getOrThrow(await fileSystem.truncateFile("data.txt", 0, ctx()));
     assert.equal(getOrThrow(await fileSystem.readTextFile("data.txt", ctx())), "");
 
-    // Drive9 has no native truncate-to-size primitive.
-    assertErrorCode(await fileSystem.truncateFile("data.txt", 5, ctx()), "not_supported");
+    // The SDK/HTTP profile exposes no truncate-to-N primitive (the server's
+    // FUSE/VFS path does, but that is a separate ExecutionEnv). A nonzero
+    // truncate must therefore fail closed WITHOUT touching remote bytes or
+    // metadata — never a silent success and never a read-modify-write.
+    client.addFile("/workspace/keep.txt", "lots of bytes");
+    const mutationsBefore = client.calls.filter((call) =>
+      ["write", "append", "rename", "removeAll", "deleteFile", "deleteDir", "mkdir"].includes(call.method),
+    ).length;
+
+    assertErrorCode(await fileSystem.truncateFile("keep.txt", 5, ctx()), "not_supported");
+
+    const mutationsAfter = client.calls.filter((call) =>
+      ["write", "append", "rename", "removeAll", "deleteFile", "deleteDir", "mkdir"].includes(call.method),
+    ).length;
+    assert.equal(mutationsAfter, mutationsBefore, "nonzero truncate must not mutate the backend");
+    // Original bytes are untouched: a read-modify-write emulation would alter them.
+    assert.equal(getOrThrow(await fileSystem.readTextFile("keep.txt", ctx())), "lots of bytes");
   });
 
   it("flushFile is a confirmation no-op for a normal path", async () => {

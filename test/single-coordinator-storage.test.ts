@@ -262,7 +262,7 @@ describe("Drive9 single-coordinator storage", () => {
     await client.append(`${client.root}/main.jsonl`, Buffer.from('{"torn":', "utf8"));
     await assert.rejects(
       openStorage(client),
-      /torn-line truncation of main\.jsonl failed: Drive9 has no native truncate-to-size primitive/,
+      /torn-line truncation of main\.jsonl failed: Drive9 SDK\/HTTP profile exposes no truncate-to-size primitive/,
     );
   });
 });

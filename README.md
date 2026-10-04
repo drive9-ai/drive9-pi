@@ -383,10 +383,11 @@ session writers, and is rejected by stable Drive9 publication mode. Use
 `storageProfile()` to inspect that machine-readable
 `single-coordinator-preview` classification. A stable multi-process adapter
 still requires a server-enforced writer epoch on every Pi storage commit.
-Because Drive9 does not yet expose nonzero truncate, a process crash that
-leaves a partial JSONL tail after earlier committed records fails closed on
-reopen and can require operator repair; this preview does not promise automatic
-crash-tail recovery.
+Because this SDK/HTTP profile exposes no public truncate-to-N primitive (the
+Drive9 server can truncate to any length over a FUSE mount, but that is a
+separate ExecutionEnv), a process crash that leaves a partial JSONL tail after
+earlier committed records fails closed on reopen and can require operator
+repair; this preview does not promise automatic crash-tail recovery.
 
 ### SDK execution environment (preview)
 
@@ -410,10 +411,11 @@ and must observe the exact acknowledged bytes. Cleanup removes and verifies the
 unique remote test root.
 
 Passing this gate proves acknowledgement visibility for the tested SDK/server
-path. The environment remains preview because Drive9 still lacks native nonzero
-truncate and the package-wide stable durable runtime still requires a
-server-enforced state-writer epoch. Use it only when an unavailable shell is the
-intended execution policy.
+path. The environment remains preview because this adapter's SDK/HTTP profile
+exposes no public truncate-to-N primitive (the Drive9 server itself can truncate
+to any length over a FUSE mount, but that is a separate ExecutionEnv) and the
+package-wide stable durable runtime still requires a server-enforced state-writer
+epoch. Use it only when an unavailable shell is the intended execution policy.
 
 ## LayerFS workspace backend (preview)
 
