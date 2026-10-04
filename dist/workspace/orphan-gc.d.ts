@@ -18,11 +18,16 @@ export type OrphanLayerReclaimOutcome = {
     readonly kind: "reclaimed";
 } | {
     readonly kind: "skipped";
-    readonly reason: "not-permanently-unpublishable" | "in-published-chain" | "has-descendant" | "layer-not-listed" | "still-referenced";
+    readonly reason: "not-permanently-unpublishable" | "in-published-chain" | "has-descendant" | "layer-not-listed" | "mixed-disposition" | "still-referenced";
 };
+/**
+ * One result per unique physical `layerId` (NOT per candidate record). A single
+ * layer can back several candidate records; eligibility is decided for the layer
+ * as a whole and it is deleted at most once.
+ */
 export type OrphanLayerReclaimResult = {
     readonly layerId: string;
-    readonly candidateKey: string;
+    readonly candidateKeys: readonly string[];
     readonly outcome: OrphanLayerReclaimOutcome;
 };
 export type ReclaimOrphanLayersInput = {

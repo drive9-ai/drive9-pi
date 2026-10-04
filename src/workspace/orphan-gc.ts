@@ -26,12 +26,18 @@ export type OrphanLayerReclaimOutcome =
         | "in-published-chain"
         | "has-descendant"
         | "layer-not-listed"
+        | "mixed-disposition" // the same physical layer also backs a published/unresolved candidate
         | "still-referenced"; // server rejected the non-cascading delete (still_pins/409)
     };
 
+/**
+ * One result per unique physical `layerId` (NOT per candidate record). A single
+ * layer can back several candidate records; eligibility is decided for the layer
+ * as a whole and it is deleted at most once.
+ */
 export type OrphanLayerReclaimResult = {
   readonly layerId: string;
-  readonly candidateKey: string;
+  readonly candidateKeys: readonly string[];
   readonly outcome: OrphanLayerReclaimOutcome;
 };
 
@@ -69,10 +75,35 @@ function referencedParentIds(layers: readonly Drive9LayerRecord[]): ReadonlySet<
   return referenced;
 }
 
-function reclaimableCandidates(
-  inventory: WorkspaceCandidateInventory,
-): readonly WorkspaceCandidateInventoryItem[] {
-  return inventory.items.filter((item) => item.disposition.kind === "permanently-unpublishable");
+type LayerGroup = {
+  readonly layerId: string;
+  readonly candidateKeys: string[];
+  readonly items: WorkspaceCandidateInventoryItem[];
+};
+
+/**
+ * Group inventory items by their physical `layerId`. Eligibility and deletion
+ * are layer-level, not item-level: several candidate records can share one
+ * layer, and a layer is only reclaimable when EVERY item backing it is
+ * permanently unpublishable. Grouping keeps the (possibly duplicated) item
+ * order so a layer is examined once and deleted at most once.
+ */
+function groupByLayer(inventory: WorkspaceCandidateInventory): LayerGroup[] {
+  const groups = new Map<string, LayerGroup>();
+  for (const item of inventory.items) {
+    const existing = groups.get(item.layerId);
+    if (existing === undefined) {
+      groups.set(item.layerId, {
+        layerId: item.layerId,
+        candidateKeys: [item.candidateKey],
+        items: [item],
+      });
+      continue;
+    }
+    existing.candidateKeys.push(item.candidateKey);
+    existing.items.push(item);
+  }
+  return [...groups.values()];
 }
 
 /**
@@ -94,9 +125,33 @@ function reclaimableCandidates(
 export async function reclaimOrphanLayers(
   input: ReclaimOrphanLayersInput,
 ): Promise<ReclaimOrphanLayersReport> {
-  const candidates = reclaimableCandidates(input.inventory);
-  if (candidates.length === 0) {
+  const groups = groupByLayer(input.inventory);
+  // A layer is a candidate for reclamation only when EVERY item backing it is
+  // permanently unpublishable. A single published/unresolved item on the same
+  // physical layer makes deleting it unsafe, so such groups are not eligible.
+  const eligible = groups.filter((group) =>
+    group.items.every((item) => item.disposition.kind === "permanently-unpublishable"),
+  );
+  // Groups that mix dispositions on one layer are reported as skipped so the
+  // outcome is observable rather than silently ignored.
+  const mixed = groups.filter(
+    (group) =>
+      group.items.some((item) => item.disposition.kind === "permanently-unpublishable") &&
+      group.items.some((item) => item.disposition.kind !== "permanently-unpublishable"),
+  );
+
+  if (eligible.length === 0 && mixed.length === 0) {
     return { reclaimedCount: 0, skippedCount: 0, results: [] };
+  }
+
+  const results: OrphanLayerReclaimResult[] = mixed.map((group) => ({
+    layerId: group.layerId,
+    candidateKeys: group.candidateKeys,
+    outcome: { kind: "skipped", reason: "mixed-disposition" },
+  }));
+
+  if (eligible.length === 0) {
+    return { reclaimedCount: 0, skippedCount: results.length, results };
   }
 
   let layers: Drive9LayerRecord[];
@@ -114,30 +169,32 @@ export async function reclaimOrphanLayers(
   const referenced = referencedParentIds(layers);
   const publishedKey = input.inventory.publishedCandidateKey;
 
-  const results: OrphanLayerReclaimResult[] = [];
-  for (const candidate of candidates) {
-    const base = { layerId: candidate.layerId, candidateKey: candidate.candidateKey };
+  for (const group of eligible) {
+    const base = { layerId: group.layerId, candidateKeys: group.candidateKeys };
 
-    // Never touch the currently published candidate, even if some disposition
-    // race classified it unpublishable: the published pointer is authoritative.
-    if (publishedKey !== null && candidate.candidateKey === publishedKey) {
+    // Never touch a layer that backs the currently published candidate, even if
+    // a disposition race classified its records unpublishable: the published
+    // pointer is authoritative.
+    if (publishedKey !== null && group.candidateKeys.includes(publishedKey)) {
       results.push({ ...base, outcome: { kind: "skipped", reason: "in-published-chain" } });
       continue;
     }
     // A layer that is not in the authoritative listing cannot be proven
     // unreferenced (it may be invisible to this credential yet forked from),
     // so retain it rather than delete blind.
-    if (!listedLayerIds.has(candidate.layerId)) {
+    if (!listedLayerIds.has(group.layerId)) {
       results.push({ ...base, outcome: { kind: "skipped", reason: "layer-not-listed" } });
       continue;
     }
-    if (referenced.has(candidate.layerId)) {
+    if (referenced.has(group.layerId)) {
       results.push({ ...base, outcome: { kind: "skipped", reason: "has-descendant" } });
       continue;
     }
 
     try {
-      await input.client.deleteFSLayer(candidate.layerId, { cascade: false });
+      // One physical delete per unique layer, regardless of how many candidate
+      // records referenced it.
+      await input.client.deleteFSLayer(group.layerId, { cascade: false });
       results.push({ ...base, outcome: { kind: "reclaimed" } });
     } catch (error) {
       if (isConflict(error)) {
@@ -148,7 +205,7 @@ export async function reclaimOrphanLayers(
       }
       throw new Drive9ProtocolError(
         "recovery_failed",
-        `orphan GC failed to delete layer ${candidate.layerId}`,
+        `orphan GC failed to delete layer ${group.layerId}`,
         protocolCause(error),
       );
     }

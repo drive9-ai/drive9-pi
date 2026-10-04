@@ -221,6 +221,49 @@ describe("reclaimOrphanLayers", () => {
     );
   });
 
+  it("skips a physical layer that also backs a non-unpublishable candidate (mixed disposition)", async () => {
+    // Two candidate records share ONE physical layer "shared": one is
+    // permanently-unpublishable, the other is still unresolved. A per-item loop
+    // would delete "shared" when it reaches the unpublishable item, destroying
+    // the layer that still backs the live candidate. Eligibility is layer-level,
+    // so the whole layer must be skipped.
+    const sharedUnpublishable = item("shared", UNPUBLISHABLE, "cand-shared-dead");
+    const sharedLive: WorkspaceCandidateInventoryItem = {
+      ...item("shared", { kind: "unresolved", reason: "task-active" }, "cand-shared-live"),
+    };
+    const client = new GcFakeClient([layer("shared")]);
+    const report = await reclaimOrphanLayers({
+      inventory: inventory([sharedUnpublishable, sharedLive]),
+      client,
+      context,
+    });
+
+    assert.deepEqual(client.deleted, [], "a layer with any non-unpublishable item must not be deleted");
+    assert.equal(report.reclaimedCount, 0);
+    assert.deepEqual(report.results.map((r) => r.outcome), [{ kind: "skipped", reason: "mixed-disposition" }]);
+  });
+
+  it("deletes a physical layer with multiple unpublishable candidates exactly once", async () => {
+    // Two permanently-unpublishable candidate records back ONE physical layer.
+    // A per-item loop would call deleteFSLayer twice; eligibility and deletion
+    // are layer-level, so it is reclaimed once with a single, stable result.
+    const client = new GcFakeClient([layer("dupe")]);
+    const report = await reclaimOrphanLayers({
+      inventory: inventory([
+        item("dupe", UNPUBLISHABLE, "cand-dupe-a"),
+        item("dupe", UNPUBLISHABLE, "cand-dupe-b"),
+      ]),
+      client,
+      context,
+    });
+
+    assert.deepEqual(client.deleted, ["dupe"], "the physical layer is deleted exactly once");
+    assert.equal(report.reclaimedCount, 1);
+    assert.equal(report.results.length, 1, "one result per physical layer");
+    assert.deepEqual(report.results[0]?.candidateKeys, ["cand-dupe-a", "cand-dupe-b"]);
+    assert.equal(report.results[0]?.outcome.kind, "reclaimed");
+  });
+
   it("does nothing when there are no permanently-unpublishable candidates", async () => {
     const client = new GcFakeClient([layer("live")]);
     const report = await reclaimOrphanLayers({
