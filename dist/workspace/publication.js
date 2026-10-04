@@ -86,6 +86,18 @@ function requireCandidates(entries, resultIndex, attemptIndex, attemptEntryId, a
 function exactCheckpoint(left, right) {
     return canonicalJson(left) === canonicalJson(right);
 }
+async function requireVisiblePublicationEntries(storage, conversationId, sourceConversationId, entries, context) {
+    for (const entry of entries) {
+        if (Number(entry.conversationId) !== sourceConversationId) {
+            protocolBreach("workspace publication entries cross conversation boundaries");
+        }
+        const visible = await storage.entry(conversationId, entry.id, context);
+        if (visible === undefined ||
+            canonicalJson(visible.entry) !== canonicalJson(entry)) {
+            protocolBreach("workspace publication entry is not visible from the target conversation");
+        }
+    }
+}
 function publishedRef(candidate) {
     return {
         candidateKey: candidate.data.candidateKey,
@@ -148,6 +160,7 @@ async function resolveFromIndex(entries, startIndex, input) {
             protocolBreach("workspace attempt conversation does not match its ToolTask");
         }
         const selected = requireCandidates(entries, resultIndex, attemptIndex, entries[attemptIndex].id, attempt, taskId);
+        await requireVisiblePublicationEntries(input.storage, input.conversationId, attempt.conversationId, [entries[attemptIndex], selected.entry, resultEntry], input.context);
         let verified;
         try {
             verified = await input.verifier.verify(selected.data, input.context);

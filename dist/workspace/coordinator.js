@@ -77,12 +77,6 @@ export class Drive9WorkspaceCoordinator {
                 ? {}
                 : { onAbandonError: this.#options.onAbandonError }),
         });
-        if (recovered.published !== undefined) {
-            if (recovered.published.data.sessionId !== this.#options.sessionId ||
-                recovered.published.data.conversationId !== Number(input.conversationId)) {
-                throw new Drive9ProtocolError("publication_breach", "published workspace candidate belongs to another session or conversation");
-            }
-        }
         if (input.env === undefined || input.env.id !== recovered.binding.handle.executionEnvId) {
             throw new Drive9ProtocolError("execution_env_mismatch", "Pi tools and shell must use the recovered Drive9 workspace namespace");
         }

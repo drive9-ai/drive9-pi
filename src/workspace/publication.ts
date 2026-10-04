@@ -114,6 +114,27 @@ function exactCheckpoint(left: VerifiedWorkspaceCheckpoint, right: VerifiedWorks
   return canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue);
 }
 
+async function requireVisiblePublicationEntries(
+  storage: Storage,
+  conversationId: ConversationId,
+  sourceConversationId: number,
+  entries: readonly EntryRecord[],
+  context: Context,
+): Promise<void> {
+  for (const entry of entries) {
+    if (Number(entry.conversationId) !== sourceConversationId) {
+      protocolBreach("workspace publication entries cross conversation boundaries");
+    }
+    const visible = await storage.entry(conversationId, entry.id, context);
+    if (
+      visible === undefined ||
+      canonicalJson(visible.entry as unknown as JsonValue) !== canonicalJson(entry as unknown as JsonValue)
+    ) {
+      protocolBreach("workspace publication entry is not visible from the target conversation");
+    }
+  }
+}
+
 function publishedRef(candidate: PublishedWorkspaceCandidate): PublishedWorkspaceRef {
   return {
     candidateKey: candidate.data.candidateKey,
@@ -166,6 +187,7 @@ async function resolveFromIndex(
   startIndex: number,
   input: {
     readonly storage: Storage;
+    readonly conversationId: ConversationId;
     readonly verifier: WorkspaceCandidateVerifier;
     readonly context: Context;
   },
@@ -205,6 +227,13 @@ async function resolveFromIndex(
       entries[attemptIndex]!.id,
       attempt,
       taskId,
+    );
+    await requireVisiblePublicationEntries(
+      input.storage,
+      input.conversationId,
+      attempt.conversationId,
+      [entries[attemptIndex]!, selected.entry, resultEntry],
+      input.context,
     );
     let verified: VerifiedWorkspaceCheckpoint;
     try {
