@@ -25,6 +25,20 @@ the same SDK-backed filesystem namespace plus a Shell implementation that
 always returns typed `shell_unavailable`; it is not a command runner or a host
 fallback.
 
+The direct SDK profile is normative only as a correctness-first path for
+file-only, headless, or low-frequency agents. It does not inherit the Drive9
+CLI/FUSE mount's local caches, writeback batching, metadata prefetch, or
+mount-level coordination, and no real-backend recovery result is a
+coding-agent performance claim. The intended coding-agent target is a mounted
+workspace in which Pi file tools and shell commands share one Drive9 mount;
+that target remains preview and cannot be promoted to stable until Drive9
+provides an atomic quiesce-plus-checkpoint barrier.
+
+Pi JSONL over the direct SDK is also a preview correctness bridge rather than
+the long-term state architecture. Stable multi-process Pi state should move to
+native transactional or batched storage that fences and persists one logical
+Pi commit as one backend transaction.
+
 `createDrive9PiIntegration` remains a lower-level agent-core preset. It binds
 Pi's harness read/write/edit/list tools to a private file-only environment,
 installs the evidence tools and fallback, and returns complete `AgentOptions`
@@ -372,3 +386,11 @@ A releasable head must prove:
     boundary a fresh Node process with its own Drive9 client performs one
     no-retry read and verifies exact binary bytes, and teardown fails unless the
     unique remote root is removed.
+20. the required-mode clean-consumer gate installs the packed public package
+    with released Drive9 0.2.0, composes Pi's real `Harness` and native coding
+    tools only through public exports, keeps the owner credential out of worker
+    processes, proves disjoint workspace/state/evidence authority, uses real
+    `SIGKILL` boundaries for dirty/checkpoint/candidate states, recovers exact
+    published bytes without visibility retries, proves the next mutation starts
+    there, and rejects terminal Pi success without matching publication proof as
+    `publication_breach` before workspace access.
