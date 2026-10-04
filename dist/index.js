@@ -4,6 +4,7 @@ export { Drive9ProtocolError, } from "./core/errors.js";
 export { Drive9SdkExecutionEnv, } from "./environment/sdk-environment.js";
 export { createDrive9DurableExtension, DRIVE9_DURABLE_EXTENSION_NAME, } from "./extension/durable-extension.js";
 export { openDrive9SingleCoordinatorStorage, } from "./storage/jsonl-preview.js";
+export {} from "./storage/client-lease.js";
 export { requireServerFencedStorage, storageProfile, } from "./storage/profile.js";
 export { createDrive9ResultStore, Drive9ResultStoreBackend, } from "./drive9-result-backend.js";
 export { verifyEvidenceIsolation, } from "./evidence-isolation.js";

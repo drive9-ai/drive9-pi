@@ -118,11 +118,22 @@ Pi's `StorageConformance` suite, and recovers committed JSONL state when the
 same namespace is reopened.
 
 This adapter is explicitly `single-coordinator-preview`. Its required
-`coordination: "externally-exclusive"` option is a caller acknowledgement, not
-a lease or a store-level fence. It does not support concurrent session writers,
-automatic lease-expiry takeover, or promotion to stable recovery. Stable
-construction must reject it because Drive9 filesystem appends do not carry a
-server-enforced writer epoch coupled to every Pi commit.
+coordination mode is either the caller acknowledgement
+`"externally-exclusive"` or an opt-in `drive9-cas-lease-preview`. The latter
+stores a lease outside the JSONL state root, acquires/renews/releases it with
+Drive9 revision CAS, rejects an ordinary second live opener, and verifies lease
+ownership before and after every Pi commit. Lease loss before a commit prevents
+the commit; lease loss detected after a commit permanently poisons that opened
+adapter.
+
+The cooperative lease is not a store-level fence. Its expiry uses client wall
+clocks, every writer must participate, and Pi's one logical JSONL commit still
+mutates multiple files without a backend transaction. A process can lose its
+lease while an in-flight mutation lands, and a successor cannot make Drive9
+atomically reject that old write. The adapter therefore does not promise safe
+automatic takeover, concurrent session writers, or promotion to stable
+recovery. Stable construction must continue to reject it until the backend
+enforces one writer epoch across every mutation in a Pi commit.
 
 This adapter's SDK/HTTP profile also exposes no public truncate-to-N primitive.
 (The Drive9 server truncates to an arbitrary length at its JuiceFS metadata
@@ -324,9 +335,11 @@ A releasable head must prove:
     returns typed `shell_unavailable` for every command without invoking a
     process, and preserves cancellation precedence;
 13. the preview JSONL storage passes Pi `StorageConformance`, reopens committed
-    state, exposes `single-coordinator-preview`, requires explicit external
-    exclusivity, remains rejected by stable publication construction, and
-    fails closed when recovery needs the unavailable nonzero truncate primitive;
+    state, exposes `single-coordinator-preview`, requires either explicit
+    external exclusivity or the opt-in revision-CAS cooperative lease, checks
+    that lease before and after each commit, poisons the adapter on post-commit
+    lease loss, remains rejected by stable publication construction, and fails
+    closed when recovery needs the unavailable nonzero truncate primitive;
 14. conversation creation assigns deterministic disjoint workspace identities,
     transcript forks record their exact immediate cutoff lineage without Drive9
     network work, and physical recovery still selects publication from

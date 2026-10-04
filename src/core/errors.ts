@@ -7,6 +7,9 @@ export type Drive9ProtocolErrorCode =
   | "layer_depth_exhausted"
   | "publication_breach"
   | "recovery_failed"
+  | "session_already_open"
+  | "session_lease_lost"
+  | "session_lease_unavailable"
   | "session_poisoned"
   | "stable_storage_required";
 
