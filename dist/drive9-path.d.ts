@@ -2,7 +2,7 @@ type ErrorFactory = (message: string) => Error;
 /**
  * Normalize text before it is passed to the Drive9 SDK as a path.
  *
- * drive9@0.1.4 concatenates paths into request URLs, so URL delimiters,
+ * The drive9 SDK concatenates filesystem paths into request URLs, so URL delimiters,
  * percent escapes, controls, and backslashes are not safely addressable.
  * Drive9's namespace is NFC-normalized; doing the same here keeps Pi's
  * addressed and canonical paths aligned with the remote object identity.

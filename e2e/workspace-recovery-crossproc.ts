@@ -90,13 +90,13 @@ const PARENT_LATER_CONTENT = "dev1-e2e PARENT later bytes (child must NOT inheri
 const ORPHAN_CONTENT = "dev1-e2e ORPHAN unpublished bytes (must NOT be recovered)\n";
 
 // ---------------------------------------------------------------------------
-// Exact pinned SDK capability gate.
+// SDK capability gate.
 //
-// The package's public dependency remains drive9@0.1.4 until the prepared 0.2.0
-// release is published. Repository E2E uses scripts/install-pinned-drive9-sdk.sh
-// to overlay the exact reviewed SDK commit that exposes forkFSLayer/deleteFSLayer.
-// No raw HTTP fallback is allowed: this test must exercise the production SDK
-// methods that Drive9LayerWorkspaceBackend will receive.
+// The package depends on drive9 ^0.2.0, which exposes the LayerFS
+// forkFSLayer/deleteFSLayer/listFSLayers methods. This gate fails loudly if the
+// installed SDK somehow lacks them (e.g. a stale resolution) rather than
+// silently falling back. No raw HTTP fallback is allowed: this test must
+// exercise the production SDK methods that Drive9LayerWorkspaceBackend receives.
 // ---------------------------------------------------------------------------
 const REQUIRED_LAYER_METHODS = [
   "getFSLayer",
@@ -113,7 +113,7 @@ function requiredLayerClient(client: Client): Drive9LayerWorkspaceClient {
   const missing = REQUIRED_LAYER_METHODS.filter((method) => typeof methods[method] !== "function");
   if (missing.length > 0) {
     throw new Error(
-      `Drive9 SDK is missing ${missing.join(", ")}; run bash scripts/install-pinned-drive9-sdk.sh`,
+      `Drive9 SDK is missing ${missing.join(", ")}; ensure drive9 >= 0.2.0 is installed`,
     );
   }
   return client as unknown as Drive9LayerWorkspaceClient;
