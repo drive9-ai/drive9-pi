@@ -6,7 +6,7 @@
  * generation from the PUBLISHED checkpoint on the live Drive9 server
  * (`~/.drive9/config` -> `Client.defaultClient()`).
  *
- * It proves three things that a broken implementation would fail:
+ * It proves four things that a broken implementation would fail:
  *
  *   1. TRUE cross-process read. The parent process publishes + checkpoints +
  *      runs recovery. A SECOND, freshly spawned Node process (`npx tsx <self>`
@@ -20,12 +20,17 @@
  *
  *   2. Fork-from-PUBLISHED, not latest-physical, not in-place. We deliberately
  *      create a LATER orphan/unpublished checkpoint whose bytes DIFFER from the
- *      published bytes. Recovery must still fork from the published checkpoint,
- *      so the recovered + cross-process-read bytes equal the PUBLISHED content
- *      and NOT the orphan content, the recovered layer is a NEW generation
+ *      parent head. Recovery must still fork from the published checkpoint, so
+ *      the recovered + cross-process-read bytes equal the PUBLISHED content and
+ *      NOT the orphan content, the recovered layer is a NEW generation
  *      (different layerId), and it carries no inherited writes (0 events).
  *
- *   3. Fail-closed on a publication breach. A published candidate whose root
+ *   3. Conversation fork cutoff. The parent publishes A, forks a Pi child, then
+ *      publishes B. Parent recovery must fork from B while child recovery must
+ *      fork from A. Independent processes verify both exact byte sets and exact
+ *      checkpoint lineage. Reading the parent's latest head for the child fails.
+ *
+ *   4. Fail-closed on a publication breach. A published candidate whose root
  *      lineage does not match the recovery's initialCheckpoint is rejected with
  *      Drive9ProtocolError("publication_breach") before any workspace mutation.
  *
@@ -73,6 +78,7 @@ import {
 } from "../src/workspace/layer-backend.js";
 import { recoverWorkspace } from "../src/workspace/recovery.js";
 import type {
+  PublishedWorkspaceRef,
   VerifiedWorkspaceCheckpoint,
   WorkspaceMutationPlan,
 } from "../src/workspace/types.js";
@@ -80,86 +86,36 @@ import type {
 const LAYER_PREFIX = "dev1-e2e-";
 const FILE_NAME = "state.txt";
 const PUBLISHED_CONTENT = "dev1-e2e PUBLISHED workspace bytes\n";
+const PARENT_LATER_CONTENT = "dev1-e2e PARENT later bytes (child must NOT inherit)\n";
 const ORPHAN_CONTENT = "dev1-e2e ORPHAN unpublished bytes (must NOT be recovered)\n";
 
 // ---------------------------------------------------------------------------
-// Thin Drive9LayerWorkspaceClient adapter over the installed `drive9` SDK.
+// Exact pinned SDK capability gate.
 //
-// The installed drive9@0.1.4 SDK does not surface forkFSLayer/deleteFSLayer as
-// methods, but the live server supports them at
-//   POST   /v1/layers/{id}/fork   { checkpoint_id, layer_id?, name? }
-//   DELETE /v1/layers/{id}?cascade=...
-// (verified against api.drive9.ai). This adapter consumes the REAL client for
-// every other call and bridges those two verbs via raw fetch; it is pure test
-// scaffolding and changes nothing in src/.
+// The package's public dependency remains drive9@0.1.4 until the prepared 0.2.0
+// release is published. Repository E2E uses scripts/install-pinned-drive9-sdk.sh
+// to overlay the exact reviewed SDK commit that exposes forkFSLayer/deleteFSLayer.
+// No raw HTTP fallback is allowed: this test must exercise the production SDK
+// methods that Drive9LayerWorkspaceBackend will receive.
 // ---------------------------------------------------------------------------
-type ServerLayerRecord = {
-  readonly layer_id: string;
-  readonly state: string;
-  readonly durable_seq: number;
-  readonly parent_layer_id?: string;
-  readonly origin_checkpoint_id?: string;
-  readonly root_layer_id?: string;
-  readonly depth?: number;
-};
-type ServerCheckpointRecord = {
-  readonly checkpoint_id: string;
-  readonly layer_id: string;
-  readonly durable_seq: number;
-};
-type ServerEventRecord = { readonly layer_id: string; readonly seq: number };
+const REQUIRED_LAYER_METHODS = [
+  "getFSLayer",
+  "forkFSLayer",
+  "deleteFSLayer",
+  "checkpointFSLayer",
+  "getFSLayerCheckpoint",
+  "listFSLayerEvents",
+] as const;
 
-function rawBase(client: Client): string {
-  return client.baseURL().replace(/\/+$/, "");
-}
-
-async function forkLayer(
-  client: Client,
-  parentLayerId: string,
-  request: { readonly layer_id?: string; readonly name?: string; readonly checkpoint_id?: string },
-): Promise<ServerLayerRecord> {
-  const res = await withRetry(`forkFSLayer ${parentLayerId}`, 3, () =>
-    fetch(`${rawBase(client)}/v1/layers/${encodeURIComponent(parentLayerId)}/fork`, {
-      method: "POST",
-      headers: client.authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify(request),
-    }),
-  );
-  if (!res.ok) {
-    const error = new Error(`forkFSLayer ${res.status}: ${(await res.text()).slice(0, 200)}`) as Error & {
-      statusCode?: number;
-    };
-    error.statusCode = res.status;
-    throw error;
+function requiredLayerClient(client: Client): Drive9LayerWorkspaceClient {
+  const methods = client as unknown as Record<string, unknown>;
+  const missing = REQUIRED_LAYER_METHODS.filter((method) => typeof methods[method] !== "function");
+  if (missing.length > 0) {
+    throw new Error(
+      `Drive9 SDK is missing ${missing.join(", ")}; run bash scripts/install-pinned-drive9-sdk.sh`,
+    );
   }
-  return (await res.json()) as ServerLayerRecord;
-}
-
-async function deleteLayer(client: Client, layerId: string, cascade: boolean): Promise<void> {
-  const suffix = cascade ? "?cascade=true" : "";
-  const res = await withRetry(`deleteFSLayer ${layerId}`, 3, () =>
-    fetch(`${rawBase(client)}/v1/layers/${encodeURIComponent(layerId)}${suffix}`, {
-      method: "DELETE",
-      headers: client.authHeaders(),
-    }),
-  );
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`deleteFSLayer ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  }
-}
-
-function layerClient(client: Client): Drive9LayerWorkspaceClient {
-  return {
-    getFSLayer: (layerId) => client.getFSLayer(layerId) as unknown as Promise<ServerLayerRecord>,
-    forkFSLayer: (parentRef, request) => forkLayer(client, parentRef, request ?? {}),
-    deleteFSLayer: (layerId, options) => deleteLayer(client, layerId, options?.cascade ?? false),
-    checkpointFSLayer: (layerId, request) =>
-      client.checkpointFSLayer(layerId, request) as unknown as Promise<ServerCheckpointRecord>,
-    getFSLayerCheckpoint: (checkpointId) =>
-      client.getFSLayerCheckpoint(checkpointId) as unknown as Promise<ServerCheckpointRecord>,
-    listFSLayerEvents: (layerId, since) =>
-      client.listFSLayerEvents(layerId, since) as unknown as Promise<ServerEventRecord[]>,
-  };
+  return client as unknown as Drive9LayerWorkspaceClient;
 }
 
 type MutationCounter = { forks: number; checkpoints: number; deletes: number };
@@ -227,12 +183,19 @@ class InMemoryBindings implements Drive9LayerBindingStore {
 // ---------------------------------------------------------------------------
 type Tracked = {
   readonly client: Client;
+  readonly layerClient: Drive9LayerWorkspaceClient;
   readonly created: Set<string>;
   readonly basePaths: Set<string>;
 };
 
 function trackedClient(): Tracked {
-  return { client: Client.defaultClient(), created: new Set(), basePaths: new Set() };
+  const client = Client.defaultClient();
+  return {
+    client,
+    layerClient: requiredLayerClient(client),
+    created: new Set(),
+    basePaths: new Set(),
+  };
 }
 
 async function withRetry<T>(label: string, attempts: number, run: () => Promise<T>): Promise<T> {
@@ -260,30 +223,200 @@ async function probeAvailable(tracked: Tracked): Promise<boolean> {
   }
 }
 
+function statusCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const value = (error as { readonly statusCode?: unknown }).statusCode;
+  return typeof value === "number" ? value : undefined;
+}
+
+async function deleteLayer(tracked: Tracked, layerId: string, cascade: boolean): Promise<void> {
+  try {
+    await withRetry(`deleteFSLayer ${layerId}`, 3, () =>
+      tracked.layerClient.deleteFSLayer(layerId, { cascade }),
+    );
+  } catch (error) {
+    if (statusCode(error) !== 404) throw error;
+  }
+}
+
 function filePath(base: string): string {
   return `${base}/${FILE_NAME}`;
 }
 
-// Build the real server layout:
-//   R  (root, depth 0)              -- checkpoint cpR
-//   P  = fork(R @ cpR)              -- PUBLISHED generation; bytes = PUBLISHED_CONTENT
-//        checkpoint cpP, id == candidateKey (pic_...)   <- the published source
-//   O  = fork(P @ cpP)              -- LATER orphan; bytes = ORPHAN_CONTENT (DIFFERENT)
-//        checkpoint cpO (later physical checkpoint, never published)
-// then seed MemoryStorage so resolvePublishedWorkspace() selects cpP on P.
+// Build the real server + Pi history:
+//   R   (root, depth 0)              -- checkpoint cpR
+//   P1  = fork(R @ cpR)              -- parent publishes A
+//   C   = Pi conversation fork at P1's terminal result
+//   P2  = fork(P1 @ cp1)             -- parent later publishes B
+//   O   = fork(P2 @ cp2)             -- later orphan, never published
+//
+// Parent recovery must select P2. Child recovery must select P1 through Pi's
+// ancestry/cutoff visibility, even though P2 and O physically exist later.
+type Publication = {
+  readonly layerId: string;
+  readonly checkpoint: VerifiedWorkspaceCheckpoint;
+  readonly candidateKey: string;
+  readonly resultEntryId: EntryId;
+};
+
 type Published = {
   readonly storage: MemoryStorage;
   readonly conversationId: ConversationId;
+  readonly childConversationId: ConversationId;
   readonly writerEpoch: string;
   readonly rootLayerId: string;
   readonly rootCheckpointId: string;
-  readonly publishedLayerId: string;
-  readonly publishedCheckpointId: string;
-  readonly publishedCheckpoint: VerifiedWorkspaceCheckpoint;
+  readonly forkPoint: Publication;
+  readonly parentLatest: Publication;
   readonly initialCheckpoint: VerifiedWorkspaceCheckpoint;
   readonly sessionId: string;
   readonly basePath: string;
 };
+
+function publicationRef(value: Publication): PublishedWorkspaceRef {
+  return {
+    candidateKey: value.candidateKey,
+    checkpointId: value.checkpoint.checkpointId,
+    durableSeq: value.checkpoint.durableSeq,
+    layerId: value.checkpoint.layerId,
+    rootLayerId: value.checkpoint.rootLayerId,
+    depth: value.checkpoint.depth,
+  };
+}
+
+async function appendPublishedWorkspace(
+  tracked: Tracked,
+  input: {
+    readonly storage: MemoryStorage;
+    readonly conversationId: ConversationId;
+    readonly sessionId: string;
+    readonly writerEpoch: string;
+    readonly basePath: string;
+    readonly source: VerifiedWorkspaceCheckpoint;
+    readonly previous: PublishedWorkspaceRef | null;
+    readonly label: string;
+    readonly content: string;
+  },
+): Promise<Publication> {
+  const layerId = `${LAYER_PREFIX}${input.label}-${randomUUID().slice(0, 12).replace(/-/g, "")}`;
+  tracked.created.add(layerId);
+  const layer = await withRetry(`forkFSLayer ${input.source.layerId}`, 3, () =>
+    tracked.layerClient.forkFSLayer(input.source.layerId, {
+      layer_id: layerId,
+      name: `${LAYER_PREFIX}${input.label}`,
+      checkpoint_id: input.source.checkpointId,
+    }),
+  );
+  assert.equal(layer.layer_id, layerId, `${input.label} layer identity`);
+  assert.equal(layer.parent_layer_id, input.source.layerId, `${input.label} parent layer`);
+  assert.equal(layer.origin_checkpoint_id, input.source.checkpointId, `${input.label} parent checkpoint`);
+  assert.equal(layer.root_layer_id, input.source.rootLayerId, `${input.label} root lineage`);
+  assert.equal(layer.depth, input.source.depth + 1, `${input.label} depth`);
+  await tracked.client.uploadFSLayerFile(layer.layer_id, filePath(input.basePath), Buffer.from(input.content));
+
+  const taskId = await input.storage.mintId<TaskId<JsonValue>>();
+  const attemptId = await input.storage.mintId<EntryId>();
+  const candidateId = await input.storage.mintId<EntryId>();
+  const resultId = await input.storage.mintId<EntryId>();
+  const toolCallId = `call-${input.label}`;
+  const plan: WorkspaceMutationPlan = {
+    sessionId: input.sessionId,
+    writerEpoch: input.writerEpoch,
+    workspace: {
+      layerId: layer.layer_id,
+      rootLayerId: input.source.rootLayerId,
+      parentLayerId: input.source.layerId,
+      parentCheckpointId: input.source.checkpointId,
+      depth: input.source.depth + 1,
+      executionEnvId: `drive9-layer:${layer.layer_id}`,
+    },
+    previous: input.previous,
+  };
+  const attempt = buildWorkspaceAttemptData({
+    conversationId: Number(input.conversationId),
+    taskId: Number(taskId),
+    toolCallId,
+    effect: "workspace",
+    plan,
+  });
+  const checkpointId = deriveWorkspaceCandidateKey(attempt, attemptId);
+  const checkpointRecord = await tracked.layerClient.checkpointFSLayer(layer.layer_id, {
+    checkpoint_id: checkpointId,
+    label: `${LAYER_PREFIX}${input.label}`,
+  });
+  const verified: VerifiedWorkspaceCheckpoint = {
+    checkpointId,
+    durableSeq: checkpointRecord.durable_seq,
+    layerId: layer.layer_id,
+    rootLayerId: input.source.rootLayerId,
+    parentLayerId: input.source.layerId,
+    parentCheckpointId: input.source.checkpointId,
+    depth: input.source.depth + 1,
+  };
+  const candidate = buildWorkspaceCandidateData({ attempt, attemptId, checkpoint: verified });
+  const writes: StorageWrite[] = [
+    {
+      type: "entry",
+      value: {
+        id: attemptId,
+        conversationId: input.conversationId,
+        kind: WorkspaceAttemptEntry.kind,
+        data: attempt,
+        byTaskId: taskId,
+      },
+    },
+    {
+      type: "entry",
+      value: {
+        id: candidateId,
+        conversationId: input.conversationId,
+        kind: WorkspaceCandidateEntry.kind,
+        data: candidate,
+        byTaskId: taskId,
+      },
+    },
+    {
+      type: "entry",
+      value: {
+        id: resultId,
+        conversationId: input.conversationId,
+        kind: "pi.tool-result",
+        model: [
+          {
+            role: "toolResult",
+            toolCallId,
+            toolName: "write",
+            content: [],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+        data: { diagnostics: [] },
+        byTaskId: taskId,
+      },
+    },
+    {
+      type: "task",
+      value: {
+        id: taskId,
+        conversationId: input.conversationId,
+        kind: "pi.tool",
+        version: 1,
+        input: { assistant: 1, callId: toolCallId },
+        background: false,
+        abortRequested: false,
+        state: { status: "terminal", outcome: { status: "completed", result: { entryId: resultId } } },
+      },
+    },
+  ];
+  await input.storage.commit(writes, BACKGROUND_CONTEXT);
+  return {
+    layerId: layer.layer_id,
+    checkpoint: verified,
+    candidateKey: candidate.candidateKey,
+    resultEntryId: resultId,
+  };
+}
 
 async function seedPublishedWorkspace(tracked: Tracked): Promise<Published> {
   const client = tracked.client;
@@ -309,142 +442,9 @@ async function seedPublishedWorkspace(tracked: Tracked): Promise<Published> {
     checkpoint_id: rootCheckpointId,
     label: `${LAYER_PREFIX}root`,
   });
-
-  // Published generation P = fork(R @ cpR); write PUBLISHED bytes.
-  const publishedLayerId = `${LAYER_PREFIX}pub-${randomUUID().slice(0, 12).replace(/-/g, "")}`;
-  tracked.created.add(publishedLayerId);
-  const published = await forkLayer(client, root.layer_id, {
-    layer_id: publishedLayerId,
-    name: `${LAYER_PREFIX}published`,
-    checkpoint_id: rootCheckpointId,
-  });
-  assert.equal(published.layer_id, publishedLayerId, "published layer identity");
-  await client.uploadFSLayerFile(published.layer_id, filePath(basePath), Buffer.from(PUBLISHED_CONTENT));
-
-  // The published checkpoint id must equal the Drive9 candidate digest for the
-  // attempt that publishes P's generation. Build the publication record first,
-  // then checkpoint P on the server with exactly that id.
   const storage = new MemoryStorage();
   const conversationId = await storage.mintId<ConversationId>();
   await storage.commit([{ type: "conversation", value: { id: conversationId } }], BACKGROUND_CONTEXT);
-  const taskId = await storage.mintId<TaskId<JsonValue>>();
-  const attemptId = await storage.mintId<EntryId>();
-  const candidateId = await storage.mintId<EntryId>();
-  const resultId = await storage.mintId<EntryId>();
-
-  const plan: WorkspaceMutationPlan = {
-    sessionId,
-    writerEpoch,
-    workspace: {
-      layerId: published.layer_id,
-      rootLayerId: root.layer_id,
-      parentLayerId: root.layer_id,
-      parentCheckpointId: rootCheckpointId,
-      depth: 1,
-      executionEnvId: `drive9-layer:${published.layer_id}`,
-    },
-    previous: null,
-  };
-  const attempt = buildWorkspaceAttemptData({
-    conversationId: Number(conversationId),
-    taskId: Number(taskId),
-    toolCallId: "call-published",
-    effect: "workspace",
-    plan,
-  });
-  const publishedCheckpointId = deriveWorkspaceCandidateKey(attempt, attemptId);
-
-  const cpP = await client.checkpointFSLayer(published.layer_id, {
-    checkpoint_id: publishedCheckpointId,
-    label: `${LAYER_PREFIX}published`,
-  });
-  const publishedCheckpoint: VerifiedWorkspaceCheckpoint = {
-    checkpointId: publishedCheckpointId,
-    durableSeq: cpP.durable_seq,
-    layerId: published.layer_id,
-    rootLayerId: root.layer_id,
-    parentLayerId: root.layer_id,
-    parentCheckpointId: rootCheckpointId,
-    depth: 1,
-  };
-
-  const candidate = buildWorkspaceCandidateData({ attempt, attemptId, checkpoint: publishedCheckpoint });
-
-  const writes: StorageWrite[] = [
-    {
-      type: "entry",
-      value: {
-        id: attemptId,
-        conversationId,
-        kind: WorkspaceAttemptEntry.kind,
-        data: attempt,
-        byTaskId: taskId,
-      },
-    },
-    {
-      type: "entry",
-      value: {
-        id: candidateId,
-        conversationId,
-        kind: WorkspaceCandidateEntry.kind,
-        data: candidate,
-        byTaskId: taskId,
-      },
-    },
-    {
-      type: "entry",
-      value: {
-        id: resultId,
-        conversationId,
-        kind: "pi.tool-result",
-        model: [
-          {
-            role: "toolResult",
-            toolCallId: "call-published",
-            toolName: "write",
-            content: [],
-            isError: false,
-            timestamp: 1,
-          },
-        ],
-        data: { diagnostics: [] },
-        byTaskId: taskId,
-      },
-    },
-    {
-      type: "task",
-      value: {
-        id: taskId,
-        conversationId,
-        kind: "pi.tool",
-        version: 1,
-        input: { assistant: 1, callId: "call-published" },
-        background: false,
-        abortRequested: false,
-        state: { status: "terminal", outcome: { status: "completed", result: { entryId: resultId } } },
-      },
-    },
-  ];
-  await storage.commit(writes, BACKGROUND_CONTEXT);
-
-  // LATER orphan O = fork(P @ cpP) with DIFFERENT bytes + its own checkpoint.
-  // This is the "latest physical checkpoint" that a broken recovery might
-  // wrongly select. It is never published (no storage record references it).
-  const orphanLayerId = `${LAYER_PREFIX}orphan-${randomUUID().slice(0, 12).replace(/-/g, "")}`;
-  tracked.created.add(orphanLayerId);
-  const orphan = await forkLayer(client, published.layer_id, {
-    layer_id: orphanLayerId,
-    name: `${LAYER_PREFIX}orphan`,
-    checkpoint_id: publishedCheckpointId,
-  });
-  assert.equal(orphan.layer_id, orphanLayerId, "orphan layer identity");
-  await client.uploadFSLayerFile(orphan.layer_id, filePath(basePath), Buffer.from(ORPHAN_CONTENT));
-  const orphanCheckpointId = `dev1e2ecpo${stamp}${randomUUID().slice(0, 8).replace(/-/g, "")}`;
-  await client.checkpointFSLayer(orphan.layer_id, {
-    checkpoint_id: orphanCheckpointId,
-    label: `${LAYER_PREFIX}orphan`,
-  });
-
   const initialCheckpoint: VerifiedWorkspaceCheckpoint = {
     checkpointId: rootCheckpointId,
     durableSeq: rootCheckpoint.durable_seq,
@@ -454,16 +454,71 @@ async function seedPublishedWorkspace(tracked: Tracked): Promise<Published> {
     parentCheckpointId: null,
     depth: 0,
   };
+  const forkPoint = await appendPublishedWorkspace(tracked, {
+    storage,
+    conversationId,
+    sessionId,
+    writerEpoch,
+    basePath,
+    source: initialCheckpoint,
+    previous: null,
+    label: "fork-point",
+    content: PUBLISHED_CONTENT,
+  });
+
+  const childConversationId = await storage.mintId<ConversationId>();
+  await storage.commit(
+    [
+      {
+        type: "conversation",
+        value: {
+          id: childConversationId,
+          parent: { conversationId, at: forkPoint.resultEntryId },
+        },
+      },
+    ],
+    BACKGROUND_CONTEXT,
+  );
+
+  const parentLatest = await appendPublishedWorkspace(tracked, {
+    storage,
+    conversationId,
+    sessionId,
+    writerEpoch,
+    basePath,
+    source: forkPoint.checkpoint,
+    previous: publicationRef(forkPoint),
+    label: "parent-later",
+    content: PARENT_LATER_CONTENT,
+  });
+
+  // O is a later physical checkpoint with different bytes and no Pi record.
+  const orphanLayerId = `${LAYER_PREFIX}orphan-${randomUUID().slice(0, 12).replace(/-/g, "")}`;
+  tracked.created.add(orphanLayerId);
+  const orphan = await withRetry(`forkFSLayer ${parentLatest.layerId}`, 3, () =>
+    tracked.layerClient.forkFSLayer(parentLatest.layerId, {
+      layer_id: orphanLayerId,
+      name: `${LAYER_PREFIX}orphan`,
+      checkpoint_id: parentLatest.checkpoint.checkpointId,
+    }),
+  );
+  assert.equal(orphan.layer_id, orphanLayerId, "orphan layer identity");
+  await client.uploadFSLayerFile(orphan.layer_id, filePath(basePath), Buffer.from(ORPHAN_CONTENT));
+  const orphanCheckpointId = `dev1e2ecpo${stamp}${randomUUID().slice(0, 8).replace(/-/g, "")}`;
+  await client.checkpointFSLayer(orphan.layer_id, {
+    checkpoint_id: orphanCheckpointId,
+    label: `${LAYER_PREFIX}orphan`,
+  });
 
   return {
     storage,
     conversationId,
+    childConversationId,
     writerEpoch,
     rootLayerId: root.layer_id,
     rootCheckpointId,
-    publishedLayerId: published.layer_id,
-    publishedCheckpointId,
-    publishedCheckpoint,
+    forkPoint,
+    parentLatest,
     initialCheckpoint,
     sessionId,
     basePath,
@@ -481,7 +536,7 @@ async function cascadeAbandonAll(tracked: Tracked): Promise<void> {
   }
   for (const layerId of [...tracked.created].reverse()) {
     try {
-      await deleteLayer(tracked.client, layerId, true);
+      await deleteLayer(tracked, layerId, true);
     } catch (error) {
       failures.push(new Error(`cleanup failed for ${layerId}`, { cause: error }));
     }
@@ -513,21 +568,22 @@ async function cascadeAbandonAll(tracked: Tracked): Promise<void> {
 // closed on any mismatch. Receives its expectations via DRIVE9_E2E_PAYLOAD.
 // ---------------------------------------------------------------------------
 type ChildPayload = {
+  readonly label: string;
   readonly recoveredLayerId: string;
-  readonly publishedLayerId: string;
-  readonly publishedCheckpointId: string;
+  readonly sourceLayerId: string;
+  readonly sourceCheckpointId: string;
   readonly basePath: string;
-  readonly expectedPublishedHex: string;
-  readonly orphanHex: string;
+  readonly expectedHex: string;
+  readonly forbiddenHex: readonly string[];
   readonly expectedDurableSeq: number;
   readonly expectedDepth: number;
   readonly expectedRootLayerId: string;
-  readonly expectedParentCheckpointId: string;
 };
 
 async function runChildReader(): Promise<void> {
   const payload = JSON.parse(process.env.DRIVE9_E2E_PAYLOAD ?? "{}") as ChildPayload;
   const client = Client.defaultClient(); // independent process, independent connection
+  const layerClient = requiredLayerClient(client);
   await withRetry("child.warm", 3, async () => {
     await client.warm();
   });
@@ -536,39 +592,41 @@ async function runChildReader(): Promise<void> {
   const recoveredBytes = Buffer.from(
     await withRetry("child.read", 3, () => client.readFSLayerFile(payload.recoveredLayerId, filePath(payload.basePath))),
   );
-  const expectedPublished = Buffer.from(payload.expectedPublishedHex, "hex");
-  const orphan = Buffer.from(payload.orphanHex, "hex");
+  const expected = Buffer.from(payload.expectedHex, "hex");
 
-  assert.ok(expectedPublished.equals(recoveredBytes), "recovered bytes must equal the PUBLISHED content");
-  assert.ok(!orphan.equals(recoveredBytes), "recovered bytes must NOT equal the ORPHAN content");
+  assert.ok(expected.equals(recoveredBytes), `${payload.label} bytes must equal its published checkpoint`);
+  for (const forbiddenHex of payload.forbiddenHex) {
+    assert.ok(
+      !Buffer.from(forbiddenHex, "hex").equals(recoveredBytes),
+      `${payload.label} bytes must not equal a later or orphan workspace`,
+    );
+  }
 
   // (b) Independently resolve the published checkpoint identity + lineage.
-  const checkpoint = (await withRetry("child.getCheckpoint", 3, () =>
-    client.getFSLayerCheckpoint(payload.publishedCheckpointId),
-  )) as unknown as ServerCheckpointRecord;
-  assert.equal(checkpoint.checkpoint_id, payload.publishedCheckpointId, "checkpoint identity");
-  assert.equal(checkpoint.layer_id, payload.publishedLayerId, "checkpoint belongs to the published layer");
+  const checkpoint = await withRetry("child.getCheckpoint", 3, () =>
+    layerClient.getFSLayerCheckpoint(payload.sourceCheckpointId),
+  );
+  assert.equal(checkpoint.checkpoint_id, payload.sourceCheckpointId, "checkpoint identity");
+  assert.equal(checkpoint.layer_id, payload.sourceLayerId, "checkpoint belongs to the published layer");
   assert.equal(checkpoint.durable_seq, payload.expectedDurableSeq, "checkpoint durable sequence");
 
   // (c) Independently confirm the recovered layer is a fresh fork of P@cpP.
-  const recovered = (await withRetry("child.getLayer", 3, () =>
-    client.getFSLayer(payload.recoveredLayerId),
-  )) as unknown as ServerLayerRecord;
-  assert.notEqual(recovered.layer_id, payload.publishedLayerId, "recovered layer is a NEW generation");
-  assert.equal(recovered.parent_layer_id, payload.publishedLayerId, "recovered parent is the published layer");
+  const recovered = await withRetry("child.getLayer", 3, () => layerClient.getFSLayer(payload.recoveredLayerId));
+  assert.notEqual(recovered.layer_id, payload.sourceLayerId, "recovered layer is a NEW generation");
+  assert.equal(recovered.parent_layer_id, payload.sourceLayerId, "recovered parent is the published layer");
   assert.equal(
     recovered.origin_checkpoint_id,
-    payload.expectedParentCheckpointId,
+    payload.sourceCheckpointId,
     "recovered layer forked from the published checkpoint",
   );
   assert.equal(recovered.root_layer_id, payload.expectedRootLayerId, "recovered root lineage");
   assert.equal(recovered.depth, payload.expectedDepth, "recovered depth = published depth + 1");
   const recoveredEvents = await withRetry("child.listEvents", 3, () =>
-    client.listFSLayerEvents(payload.recoveredLayerId, 0),
+    layerClient.listFSLayerEvents(payload.recoveredLayerId, 0),
   );
   assert.equal(recoveredEvents.length, 0, "recovered generation starts without unpublished events");
 
-  process.stdout.write("CHILD-OK: cross-process read matches the published checkpoint exactly\n");
+  process.stdout.write(`CHILD-OK: ${payload.label} matches its published checkpoint exactly\n`);
 }
 
 function spawnChildReader(payload: ChildPayload): number {
@@ -596,7 +654,7 @@ function spawnChildReader(payload: ChildPayload): number {
 async function assertPublicationBreachFailsClosed(tracked: Tracked, published: Published): Promise<void> {
   const counter: MutationCounter = { forks: 0, checkpoints: 0, deletes: 0 };
   const backend = new Drive9LayerWorkspaceBackend({
-    client: countingLayerClient(layerClient(tracked.client), counter),
+    client: countingLayerClient(tracked.layerClient, counter),
     bindings: new InMemoryBindings(),
   });
   // initialCheckpoint from a DIFFERENT root lineage: resolvePublishedWorkspace
@@ -636,7 +694,7 @@ async function assertPublicationBreachFailsClosed(tracked: Tracked, published: P
   assert.equal(counter.checkpoints, 0, "publication breach must not checkpoint a backend layer");
   assert.equal(counter.deletes, 0, "publication breach must not abandon a backend layer");
   process.stdout.write(
-    "ASSERT 3 OK: foreign-root recovery fails closed (publication_breach) with ZERO backend mutation\n",
+    "ASSERT 4 OK: foreign-root recovery fails closed (publication_breach) with ZERO backend mutation\n",
   );
 }
 
@@ -655,70 +713,143 @@ async function runParent(): Promise<void> {
   try {
     const published = await seedPublishedWorkspace(tracked);
 
-    const backend = new Drive9LayerWorkspaceBackend({
-      client: layerClient(tracked.client),
+    const parentBackend = new Drive9LayerWorkspaceBackend({
+      client: tracked.layerClient,
       bindings: new InMemoryBindings(),
     });
-
-    // Drive the REAL recovery pipeline against the live server.
-    const recovered = await recoverWorkspace({
+    const parentRecovered = await recoverWorkspace({
       storage: published.storage,
       conversationId: published.conversationId,
       expectedSessionId: published.sessionId,
       initialCheckpoint: published.initialCheckpoint,
-      verifier: backend,
-      backend,
+      verifier: parentBackend,
+      backend: parentBackend,
       context: BACKGROUND_CONTEXT,
       maxLayerDepth: 16,
       mode: { kind: "single-coordinator-preview", writerEpoch: published.writerEpoch },
     });
-    const recoveredLayerId = recovered.binding.handle.layerId;
-    tracked.created.add(recoveredLayerId);
+    const parentRecoveredLayerId = parentRecovered.binding.handle.layerId;
+    tracked.created.add(parentRecoveredLayerId);
 
-    // ASSERT 2: recovery selected the PUBLISHED checkpoint as its source and
+    // ASSERT 2: parent recovery selected its newest PUBLISHED checkpoint and
     // forked a NEW generation from it (not latest-physical, not in-place).
     assert.equal(
-      recovered.published?.data.checkpoint.checkpointId,
-      published.publishedCheckpointId,
-      "recovery resolved the PUBLISHED checkpoint",
+      parentRecovered.published?.data.checkpoint.checkpointId,
+      published.parentLatest.checkpoint.checkpointId,
+      "parent recovery resolved its latest published checkpoint",
     );
     assert.equal(
-      recovered.binding.handle.parentCheckpointId,
-      published.publishedCheckpointId,
-      "recovered generation forked from the published checkpoint",
+      parentRecovered.binding.handle.parentCheckpointId,
+      published.parentLatest.checkpoint.checkpointId,
+      "parent generation forked from its published checkpoint",
     );
     assert.equal(
-      recovered.binding.handle.parentLayerId,
-      published.publishedLayerId,
-      "recovered generation parent is the published layer",
+      parentRecovered.binding.handle.parentLayerId,
+      published.parentLatest.layerId,
+      "parent generation source is the published layer",
     );
     assert.notEqual(
-      recoveredLayerId,
-      published.publishedLayerId,
-      "recovered generation is a NEW layer, not in-place",
+      parentRecoveredLayerId,
+      published.parentLatest.layerId,
+      "parent recovery creates a NEW layer, not in-place",
     );
-    assert.equal(recovered.binding.hasUnpublishedWrites, false, "recovered generation has no inherited writes");
-    assert.equal(recovered.binding.handle.depth, published.publishedCheckpoint.depth + 1, "depth = published + 1");
-    process.stdout.write("ASSERT 2 OK: recovery forked a fresh generation from the PUBLISHED checkpoint\n");
+    assert.equal(
+      parentRecovered.binding.hasUnpublishedWrites,
+      false,
+      "parent recovery has no inherited writes",
+    );
+    assert.equal(
+      parentRecovered.binding.handle.depth,
+      published.parentLatest.checkpoint.depth + 1,
+      "parent recovery depth = published + 1",
+    );
+    process.stdout.write("ASSERT 2 OK: parent recovery forked from its latest published checkpoint\n");
 
-    // ASSERT 1: TRUE cross-process read + byte-exact match of PUBLISHED (not ORPHAN).
-    const payload: ChildPayload = {
-      recoveredLayerId,
-      publishedLayerId: published.publishedLayerId,
-      publishedCheckpointId: published.publishedCheckpointId,
+    // ASSERT 1: TRUE cross-process read of the parent head, not the orphan.
+    const parentPayload: ChildPayload = {
+      label: "parent",
+      recoveredLayerId: parentRecoveredLayerId,
+      sourceLayerId: published.parentLatest.layerId,
+      sourceCheckpointId: published.parentLatest.checkpoint.checkpointId,
       basePath: published.basePath,
-      expectedPublishedHex: Buffer.from(PUBLISHED_CONTENT).toString("hex"),
-      orphanHex: Buffer.from(ORPHAN_CONTENT).toString("hex"),
-      expectedDurableSeq: published.publishedCheckpoint.durableSeq,
-      expectedDepth: published.publishedCheckpoint.depth + 1,
+      expectedHex: Buffer.from(PARENT_LATER_CONTENT).toString("hex"),
+      forbiddenHex: [
+        Buffer.from(PUBLISHED_CONTENT).toString("hex"),
+        Buffer.from(ORPHAN_CONTENT).toString("hex"),
+      ],
+      expectedDurableSeq: published.parentLatest.checkpoint.durableSeq,
+      expectedDepth: published.parentLatest.checkpoint.depth + 1,
       expectedRootLayerId: published.rootLayerId,
-      expectedParentCheckpointId: published.publishedCheckpointId,
     };
-    const childStatus = spawnChildReader(payload);
-    assert.equal(childStatus, 0, "fresh child process must read the published bytes by identity (exit 0)");
-    process.stdout.write("ASSERT 1 OK: independent child process read the recovered published bytes\n");
+    assert.equal(
+      spawnChildReader(parentPayload),
+      0,
+      "fresh process must read the parent published bytes by identity",
+    );
+    process.stdout.write("ASSERT 1 OK: independent process read the recovered parent publication\n");
 
-    // ASSERT 3: fail-closed publication breach.
+    // ASSERT 3: child recovery is pinned to the Pi fork cutoff. The parent has
+    // already published different bytes after that cutoff.
+    const childBackend = new Drive9LayerWorkspaceBackend({
+      client: tracked.layerClient,
+      bindings: new InMemoryBindings(),
+    });
+    const childRecovered = await recoverWorkspace({
+      storage: published.storage,
+      conversationId: published.childConversationId,
+      expectedSessionId: published.sessionId,
+      initialCheckpoint: published.initialCheckpoint,
+      verifier: childBackend,
+      backend: childBackend,
+      context: BACKGROUND_CONTEXT,
+      maxLayerDepth: 16,
+      mode: { kind: "single-coordinator-preview", writerEpoch: `${published.writerEpoch}-child` },
+    });
+    const childRecoveredLayerId = childRecovered.binding.handle.layerId;
+    tracked.created.add(childRecoveredLayerId);
+    assert.equal(
+      childRecovered.published?.data.checkpoint.checkpointId,
+      published.forkPoint.checkpoint.checkpointId,
+      "child resolves the publication visible at its exact transcript cutoff",
+    );
+    assert.equal(
+      childRecovered.binding.handle.parentLayerId,
+      published.forkPoint.layerId,
+      "child forks from the cutoff-visible parent layer",
+    );
+    assert.equal(
+      childRecovered.binding.handle.parentCheckpointId,
+      published.forkPoint.checkpoint.checkpointId,
+      "child forks from the cutoff-visible checkpoint",
+    );
+    assert.notEqual(
+      childRecovered.binding.handle.parentCheckpointId,
+      published.parentLatest.checkpoint.checkpointId,
+      "child must not use the parent's post-cutoff checkpoint",
+    );
+    const childPayload: ChildPayload = {
+      label: "conversation child",
+      recoveredLayerId: childRecoveredLayerId,
+      sourceLayerId: published.forkPoint.layerId,
+      sourceCheckpointId: published.forkPoint.checkpoint.checkpointId,
+      basePath: published.basePath,
+      expectedHex: Buffer.from(PUBLISHED_CONTENT).toString("hex"),
+      forbiddenHex: [
+        Buffer.from(PARENT_LATER_CONTENT).toString("hex"),
+        Buffer.from(ORPHAN_CONTENT).toString("hex"),
+      ],
+      expectedDurableSeq: published.forkPoint.checkpoint.durableSeq,
+      expectedDepth: published.forkPoint.checkpoint.depth + 1,
+      expectedRootLayerId: published.rootLayerId,
+    };
+    assert.equal(
+      spawnChildReader(childPayload),
+      0,
+      "fresh process must read the child fork-cutoff bytes by identity",
+    );
+    process.stdout.write("ASSERT 3 OK: conversation child recovered the fork-cutoff workspace\n");
+
+    // ASSERT 4: fail-closed publication breach.
     await assertPublicationBreachFailsClosed(tracked, published);
 
   } catch (error) {
@@ -734,7 +865,9 @@ async function runParent(): Promise<void> {
     }
   }
   if (runError !== undefined) throw runError;
-  process.stdout.write("PASS: real cross-process restore-by-fork recovery E2E (cleanup verified)\n");
+  process.stdout.write(
+    "PASS: real SDK cross-process recovery + conversation-fork cutoff E2E (cleanup verified)\n",
+  );
 }
 
 async function main(): Promise<void> {
