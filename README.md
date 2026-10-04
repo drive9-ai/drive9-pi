@@ -396,9 +396,24 @@ always returns `shell_unavailable`; it never starts or falls back to a host
 process, even when callers provide a working directory, environment variables,
 or output callback.
 
-The environment remains preview until acknowledged SDK writes are proven
-immediately retrievable from another process against a real Drive9 backend.
-Use it only when an unavailable shell is the intended execution policy.
+Repository maintainers can run the required-mode acknowledgement gate against
+an authenticated real Drive9 backend:
+
+```bash
+DRIVE9_E2E_REQUIRED=1 node --import tsx e2e/sdk-durability-crossproc.ts
+```
+
+The gate performs binary `writeFile`, `appendFile`, and `flushFile` operations,
+then immediately launches a fresh Node process with its own Drive9 client for
+each boundary. Each child performs one read without a visibility sleep or retry
+and must observe the exact acknowledged bytes. Cleanup removes and verifies the
+unique remote test root.
+
+Passing this gate proves acknowledgement visibility for the tested SDK/server
+path. The environment remains preview because Drive9 still lacks native nonzero
+truncate and the package-wide stable durable runtime still requires a
+server-enforced state-writer epoch. Use it only when an unavailable shell is the
+intended execution policy.
 
 ## LayerFS workspace backend (preview)
 

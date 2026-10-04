@@ -90,9 +90,16 @@ inventing compute:
   process; and
 - an already-aborted context returns `aborted` before any other result.
 
-This environment remains preview until real-backend tests prove that every
-acknowledged SDK write or append is immediately retrievable from another
-process. The class does not make the direct-SDK durability profile stable.
+The repository's required-mode real-backend gate proves that acknowledged SDK
+write and append bytes are immediately retrievable by a fresh Node process with
+an independent Drive9 client, without visibility sleeps or retries. It also
+checks the documented confirmation-only `flushFile` boundary and verifies
+remote cleanup.
+
+This closes the acknowledgement-visibility gate for the tested SDK/server path;
+it does not by itself make the direct-SDK durability profile stable. Native
+nonzero truncate and a server-enforced state-writer epoch for stable durable
+runtime composition remain prerequisites.
 
 ### 1.3 Pi 1.0 State Storage Preview Contract
 
@@ -335,3 +342,8 @@ A releasable head must prove:
     published, permanently unpublishable, and unresolved counts, preserves
     fork-cutoff-hidden candidates as unresolved, treats reporter failure as
     observability-only, and has no physical deletion path.
+19. the required-mode direct-SDK acknowledgement gate performs write, append,
+    and flush through `Drive9DurableFileSystem`; after each acknowledged
+    boundary a fresh Node process with its own Drive9 client performs one
+    no-retry read and verifies exact binary bytes, and teardown fails unless the
+    unique remote root is removed.
