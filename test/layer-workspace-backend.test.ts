@@ -92,6 +92,11 @@ class FakeClient implements Drive9LayerWorkspaceClient {
     return value;
   }
 
+  async listFSLayers(): Promise<Drive9LayerRecord[]> {
+    this.calls.push({ method: "listFSLayers", args: [] });
+    return [...this.layers.values()];
+  }
+
   async forkFSLayer(
     parentRef: string,
     request: { readonly layer_id?: string; readonly checkpoint_id?: string } = {},

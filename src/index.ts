@@ -95,6 +95,13 @@ export {
   type WorkspaceCandidateInventoryItem,
 } from "./workspace/orphans.js";
 export {
+  reclaimOrphanLayers,
+  type OrphanLayerReclaimOutcome,
+  type OrphanLayerReclaimResult,
+  type ReclaimOrphanLayersInput,
+  type ReclaimOrphanLayersReport,
+} from "./workspace/orphan-gc.js";
+export {
   DRIVE9_WORKSPACE_BARRIER_PROTOCOL,
   DRIVE9_WORKSPACE_PROTOCOL_VERSION,
   type Drive9Effect,

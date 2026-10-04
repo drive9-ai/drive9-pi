@@ -100,6 +100,7 @@ const ORPHAN_CONTENT = "dev1-e2e ORPHAN unpublished bytes (must NOT be recovered
 // ---------------------------------------------------------------------------
 const REQUIRED_LAYER_METHODS = [
   "getFSLayer",
+  "listFSLayers",
   "forkFSLayer",
   "deleteFSLayer",
   "checkpointFSLayer",
@@ -128,6 +129,7 @@ function countingLayerClient(
 ): Drive9LayerWorkspaceClient {
   return {
     getFSLayer: (layerId) => inner.getFSLayer(layerId),
+    listFSLayers: () => inner.listFSLayers(),
     forkFSLayer: (parentRef, request) => {
       counter.forks += 1;
       return inner.forkFSLayer(parentRef, request);

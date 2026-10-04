@@ -63,11 +63,19 @@ physical checkpoint deletion.
 The package exposes a separate candidate-inventory surface for V1 orphan
 operations. It coalesces identical candidate records, meters published,
 permanently unpublishable, and unresolved candidates, and exposes a
-best-effort reporting hook. Inventory is observational only: it performs no
-delete, and a permanently unpublishable Pi candidate is not treated as proof
-that no historical fork references its physical checkpoint. Checkpoints that
-exist without a durable candidate record are outside this inventory and remain
-retained.
+best-effort reporting hook. The inventory API itself is observational: it
+performs no delete, and a permanently unpublishable Pi candidate is not treated
+as proof that no historical fork references its physical checkpoint.
+
+A separate `reclaimOrphanLayers` API performs reference-aware orphan *layer* GC.
+It reclaims only layers the inventory has already proven permanently
+unpublishable AND that no other layer references as a fork parent, building the
+reference index from the full `listFSLayers()` list (never from the candidate
+subset, which omits checkpoint-only and other non-candidate layers). It deletes
+non-cascading, treats a server `still_pins`/409 as still-referenced and skips
+it, fails closed if it cannot enumerate layers, and never reclaims by age or
+count. It does NOT provide orphan *checkpoint* GC: checkpoints that exist
+without a durable candidate record remain retained.
 
 This surface remains preview until the surrounding runtime proves all required
 durability and fencing contracts. In particular, it does not claim:
@@ -75,7 +83,8 @@ durability and fencing contracts. In particular, it does not claim:
 - atomic mounted quiesce plus checkpoint;
 - stable direct-SDK acknowledgement durability across another process;
 - flatten or rebase for bounded LayerFS depth;
-- checkpoint deletion or orphan garbage collection;
+- physical checkpoint deletion or orphan *checkpoint* GC (orphan *layer* GC is
+  provided separately via `reclaimOrphanLayers`, above);
 - nonzero truncate support; or
 - a storage implementation with a server-enforced writer epoch.
 

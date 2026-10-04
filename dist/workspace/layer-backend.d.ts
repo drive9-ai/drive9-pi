@@ -23,6 +23,14 @@ export type Drive9LayerEventRecord = {
 };
 export interface Drive9LayerWorkspaceClient {
     getFSLayer(layerId: string): Promise<Drive9LayerRecord>;
+    /**
+     * Enumerate every LayerFS layer the caller's scoped credential can see. Used
+     * by orphan GC to build a full parent→children reference index: a candidate
+     * layer may only be reclaimed when nothing else forks from it, and that set
+     * is NOT derivable from the candidate inventory alone (checkpoint-only and
+     * other non-candidate layers can still reference it).
+     */
+    listFSLayers(): Promise<Drive9LayerRecord[]>;
     forkFSLayer(parentRef: string, request?: {
         readonly layer_id?: string;
         readonly name?: string;

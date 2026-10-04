@@ -1,0 +1,220 @@
+import type { Context } from "@earendil-works/chord";
+import { Drive9ProtocolError, protocolCause } from "../core/errors.js";
+import type { Drive9LayerRecord, Drive9LayerWorkspaceClient } from "./layer-backend.js";
+import type { WorkspaceCandidateInventory, WorkspaceCandidateInventoryItem } from "./orphans.js";
+
+/**
+ * Reference-aware orphan GC for abandoned LayerFS workspace layers.
+ *
+ * A candidate layer may be reclaimed ONLY when the inventory has already proven
+ * it permanently unpublishable AND nothing else still references it. We never
+ * reclaim by age or count, and we never cascade: a layer that still pins
+ * descendants must survive. The reference check is built from the FULL layer
+ * list (not the candidate inventory, which omits checkpoint-only and other
+ * non-candidate layers that can still fork from a candidate), and the
+ * server-side `still_pins`/409 on a non-cascading delete is the final arbiter
+ * for any fork that races between enumeration and deletion.
+ */
+
+/** Why a reclaim decision came out the way it did (observable, for reporting). */
+export type OrphanLayerReclaimOutcome =
+  | { readonly kind: "reclaimed" }
+  | {
+      readonly kind: "skipped";
+      readonly reason:
+        | "not-permanently-unpublishable"
+        | "in-published-chain"
+        | "has-descendant"
+        | "layer-not-listed"
+        | "mixed-disposition" // the same physical layer also backs a published/unresolved candidate
+        | "still-referenced"; // server rejected the non-cascading delete (still_pins/409)
+    };
+
+/**
+ * One result per unique physical `layerId` (NOT per candidate record). A single
+ * layer can back several candidate records; eligibility is decided for the layer
+ * as a whole and it is deleted at most once.
+ */
+export type OrphanLayerReclaimResult = {
+  readonly layerId: string;
+  readonly candidateKeys: readonly string[];
+  readonly outcome: OrphanLayerReclaimOutcome;
+};
+
+export type ReclaimOrphanLayersInput = {
+  readonly inventory: WorkspaceCandidateInventory;
+  readonly client: Drive9LayerWorkspaceClient;
+  readonly context: Context;
+};
+
+export type ReclaimOrphanLayersReport = {
+  readonly reclaimedCount: number;
+  readonly skippedCount: number;
+  readonly results: readonly OrphanLayerReclaimResult[];
+};
+
+function isConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const value = error as { readonly name?: unknown; readonly statusCode?: unknown };
+  return value.statusCode === 409 || value.name === "ConflictError";
+}
+
+/**
+ * Build the set of layer ids that are referenced as a parent by any live layer.
+ * A layer with a nonempty `state` that is NOT a terminal tombstone still counts
+ * as a reference; we deliberately keep this conservative — any layer row naming
+ * our candidate as its parent blocks reclamation, so a stale or unexpected
+ * child errs toward retention, never toward deletion.
+ */
+function referencedParentIds(layers: readonly Drive9LayerRecord[]): ReadonlySet<string> {
+  const referenced = new Set<string>();
+  for (const layer of layers) {
+    const parent = layer.parent_layer_id;
+    if (parent !== undefined && parent.length > 0) referenced.add(parent);
+  }
+  return referenced;
+}
+
+type LayerGroup = {
+  readonly layerId: string;
+  readonly candidateKeys: string[];
+  readonly items: WorkspaceCandidateInventoryItem[];
+};
+
+/**
+ * Group inventory items by their physical `layerId`. Eligibility and deletion
+ * are layer-level, not item-level: several candidate records can share one
+ * layer, and a layer is only reclaimable when EVERY item backing it is
+ * permanently unpublishable. Grouping keeps the (possibly duplicated) item
+ * order so a layer is examined once and deleted at most once.
+ */
+function groupByLayer(inventory: WorkspaceCandidateInventory): LayerGroup[] {
+  const groups = new Map<string, LayerGroup>();
+  for (const item of inventory.items) {
+    const existing = groups.get(item.layerId);
+    if (existing === undefined) {
+      groups.set(item.layerId, {
+        layerId: item.layerId,
+        candidateKeys: [item.candidateKey],
+        items: [item],
+      });
+      continue;
+    }
+    existing.candidateKeys.push(item.candidateKey);
+    existing.items.push(item);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Reclaim permanently-unpublishable orphan layers that nothing else references.
+ *
+ * Fail-closed guarantees:
+ * - If the full layer listing cannot be fetched, the whole pass aborts with a
+ *   protocol error: without the reference index we cannot prove safety, so we
+ *   reclaim nothing.
+ * - A candidate whose layer still has any descendant (direct child in the layer
+ *   list) is skipped, never deleted.
+ * - Deletion is always non-cascading. A server `still_pins`/409 — a fork that
+ *   committed between enumeration and deletion — is treated as "still
+ *   referenced" and skipped, NEVER retried as a cascading delete.
+ * - Any other deletion error aborts the pass (the layer is left intact and the
+ *   error surfaces), so a transient backend fault never silently drops work or
+ *   marks a layer reclaimed that was not deleted.
+ */
+export async function reclaimOrphanLayers(
+  input: ReclaimOrphanLayersInput,
+): Promise<ReclaimOrphanLayersReport> {
+  const groups = groupByLayer(input.inventory);
+  // A layer is a candidate for reclamation only when EVERY item backing it is
+  // permanently unpublishable. A single published/unresolved item on the same
+  // physical layer makes deleting it unsafe, so such groups are not eligible.
+  const eligible = groups.filter((group) =>
+    group.items.every((item) => item.disposition.kind === "permanently-unpublishable"),
+  );
+  // Groups that mix dispositions on one layer are reported as skipped so the
+  // outcome is observable rather than silently ignored.
+  const mixed = groups.filter(
+    (group) =>
+      group.items.some((item) => item.disposition.kind === "permanently-unpublishable") &&
+      group.items.some((item) => item.disposition.kind !== "permanently-unpublishable"),
+  );
+
+  if (eligible.length === 0 && mixed.length === 0) {
+    return { reclaimedCount: 0, skippedCount: 0, results: [] };
+  }
+
+  const results: OrphanLayerReclaimResult[] = mixed.map((group) => ({
+    layerId: group.layerId,
+    candidateKeys: group.candidateKeys,
+    outcome: { kind: "skipped", reason: "mixed-disposition" },
+  }));
+
+  if (eligible.length === 0) {
+    return { reclaimedCount: 0, skippedCount: results.length, results };
+  }
+
+  let layers: Drive9LayerRecord[];
+  try {
+    layers = await input.client.listFSLayers();
+  } catch (error) {
+    throw new Drive9ProtocolError(
+      "recovery_failed",
+      "orphan GC cannot enumerate layers to prove reference safety",
+      protocolCause(error),
+    );
+  }
+
+  const listedLayerIds = new Set(layers.map((layer) => layer.layer_id));
+  const referenced = referencedParentIds(layers);
+  const publishedKey = input.inventory.publishedCandidateKey;
+
+  for (const group of eligible) {
+    const base = { layerId: group.layerId, candidateKeys: group.candidateKeys };
+
+    // Never touch a layer that backs the currently published candidate, even if
+    // a disposition race classified its records unpublishable: the published
+    // pointer is authoritative.
+    if (publishedKey !== null && group.candidateKeys.includes(publishedKey)) {
+      results.push({ ...base, outcome: { kind: "skipped", reason: "in-published-chain" } });
+      continue;
+    }
+    // A layer that is not in the authoritative listing cannot be proven
+    // unreferenced (it may be invisible to this credential yet forked from),
+    // so retain it rather than delete blind.
+    if (!listedLayerIds.has(group.layerId)) {
+      results.push({ ...base, outcome: { kind: "skipped", reason: "layer-not-listed" } });
+      continue;
+    }
+    if (referenced.has(group.layerId)) {
+      results.push({ ...base, outcome: { kind: "skipped", reason: "has-descendant" } });
+      continue;
+    }
+
+    try {
+      // One physical delete per unique layer, regardless of how many candidate
+      // records referenced it.
+      await input.client.deleteFSLayer(group.layerId, { cascade: false });
+      results.push({ ...base, outcome: { kind: "reclaimed" } });
+    } catch (error) {
+      if (isConflict(error)) {
+        // A fork committed between enumeration and deletion: the server still
+        // pins this layer. Honor that — skip, do not cascade.
+        results.push({ ...base, outcome: { kind: "skipped", reason: "still-referenced" } });
+        continue;
+      }
+      throw new Drive9ProtocolError(
+        "recovery_failed",
+        `orphan GC failed to delete layer ${group.layerId}`,
+        protocolCause(error),
+      );
+    }
+  }
+
+  const reclaimedCount = results.filter((result) => result.outcome.kind === "reclaimed").length;
+  return {
+    reclaimedCount,
+    skippedCount: results.length - reclaimedCount,
+    results,
+  };
+}
