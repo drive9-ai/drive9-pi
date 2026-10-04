@@ -420,6 +420,25 @@ cross-process SDK acknowledgement durability, or a server-enforced writer
 epoch. Callers must fail closed when their client or binding store cannot prove
 the required checkpoint, lineage, or fencing contract.
 
+Repository maintainers can run the opt-in live recovery gate with an
+authenticated Drive9 CLI configuration:
+
+```bash
+DRIVE9_E2E_REQUIRED=1 npm run e2e:recovery-crossproc
+```
+
+It creates published and later orphan LayerFS generations on the real Drive9
+service, runs `recoverWorkspace()`, and launches a second Node process with its
+own client connection to verify the recovered bytes and exact checkpoint
+lineage. Required mode fails instead of skipping when the authenticated backend
+is unavailable, and the run fails if any created layer remains active after
+cleanup. This test proves the real restore-by-fork workspace path; it still uses
+in-memory Pi Storage in explicit single-coordinator preview mode and therefore
+does not prove server-enforced writer-epoch fencing. Until a post-`0.1.4`
+Drive9 SDK package containing the LayerFS
+fork/delete methods is published, the E2E uses a test-only raw HTTP bridge for
+those two already-deployed server operations.
+
 ### Conversation workspace lineage (preview)
 
 `createDrive9ConversationCreated()` is a Pi 1.0 `conversationCreated` hook for
