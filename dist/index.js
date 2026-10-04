@@ -12,6 +12,7 @@ export { Drive9LayerWorkspaceBackend, } from "./workspace/layer-backend.js";
 export { createDrive9WorkspaceCoordinator, Drive9WorkspaceCoordinator, } from "./workspace/coordinator.js";
 export { createDrive9ConversationCreated, deriveDrive9WorkspaceId, Drive9WorkspaceDoc, parseDrive9WorkspaceDocument, readDrive9WorkspaceDocument, DRIVE9_WORKSPACE_DOCUMENT_VERSION, } from "./workspace/conversations.js";
 export {} from "./workspace/recovery.js";
+export { inspectWorkspaceCandidateInventory, reportWorkspaceCandidateInventory, } from "./workspace/orphans.js";
 export { DRIVE9_WORKSPACE_BARRIER_PROTOCOL, DRIVE9_WORKSPACE_PROTOCOL_VERSION, } from "./workspace/types.js";
 export { withDrive9Effects, } from "./workspace/wrap-tool.js";
 export { createAfterToolCallFallback, createResultReadTool, createResultSearchTool, } from "./pi-adapters.js";
