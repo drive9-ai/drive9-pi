@@ -60,6 +60,15 @@ The backend never treats the latest physical checkpoint as published truth,
 never rolls a dirty child forward, and never describes logical abandon as
 physical checkpoint deletion.
 
+The package exposes a separate candidate-inventory surface for V1 orphan
+operations. It coalesces identical candidate records, meters published,
+permanently unpublishable, and unresolved candidates, and exposes a
+best-effort reporting hook. Inventory is observational only: it performs no
+delete, and a permanently unpublishable Pi candidate is not treated as proof
+that no historical fork references its physical checkpoint. Checkpoints that
+exist without a durable candidate record are outside this inventory and remain
+retained.
+
 This surface remains preview until the surrounding runtime proves all required
 durability and fencing contracts. In particular, it does not claim:
 
@@ -322,3 +331,7 @@ A releasable head must prove:
     restore-by-fork gate only; server-enforced Pi Storage writer fencing and a
     published SDK containing the LayerFS fork/delete methods remain separate
     release prerequisites.
+18. workspace candidate inventory coalesces identical duplicates, reports
+    published, permanently unpublishable, and unresolved counts, preserves
+    fork-cutoff-hidden candidates as unresolved, treats reporter failure as
+    observability-only, and has no physical deletion path.

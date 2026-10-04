@@ -439,6 +439,30 @@ Drive9 SDK package containing the LayerFS
 fork/delete methods is published, the E2E uses a test-only raw HTTP bridge for
 those two already-deployed server operations.
 
+### Workspace candidate inventory (preview)
+
+`inspectWorkspaceCandidateInventory()` provides the V1 retention and metering
+surface for durable workspace candidates. It coalesces identical duplicate
+records and reports each logical candidate as `published`,
+`permanently-unpublishable`, or `unresolved`, with counts and a
+`requiresAttention` flag suitable for operator alerts. A terminal failed,
+aborted, orphaned, or faulted task, an error result, or an unselected candidate
+of an immutable terminal success can prove that candidate can never publish.
+An active task, a fork-cutoff-hidden result, or incomplete/mismatched evidence
+remains unresolved.
+
+`reportWorkspaceCandidateInventory()` sends the same inventory to an explicit
+best-effort reporter. Reporter failure is surfaced through `onReportError` but
+does not change the returned inventory or workspace publication truth.
+
+This API never deletes a checkpoint, layer, candidate, or evidence object.
+`permanently-unpublishable` means only that the owning Pi task can no longer
+publish the candidate; it is not proof that no historical fork references its
+checkpoint. Candidate inventory also cannot discover a physical checkpoint
+created before its candidate record became durable. Drive9 currently has no
+reference-aware physical checkpoint deletion contract, so all reported and
+undiscovered orphans remain retained.
+
 ### Conversation workspace lineage (preview)
 
 `createDrive9ConversationCreated()` is a Pi 1.0 `conversationCreated` hook for

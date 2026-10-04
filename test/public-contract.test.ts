@@ -38,6 +38,8 @@ describe("public package contract", () => {
     assert.equal(typeof packageExports.deriveDrive9WorkspaceId, "function");
     assert.equal(typeof packageExports.Drive9WorkspaceDoc, "object");
     assert.equal(typeof packageExports.readDrive9WorkspaceDocument, "function");
+    assert.equal(typeof packageExports.inspectWorkspaceCandidateInventory, "function");
+    assert.equal(typeof packageExports.reportWorkspaceCandidateInventory, "function");
     assert.equal(typeof packageExports.PersistentToolResultStore, "function");
     assert.equal(typeof packageExports.verifyRuntimeIsolation, "function");
     assert.equal("Drive9ExecutionEnv" in packageExports, false);

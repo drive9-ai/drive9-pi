@@ -86,6 +86,15 @@ export {
   type WritableWorkspaceHandle,
 } from "./workspace/recovery.js";
 export {
+  inspectWorkspaceCandidateInventory,
+  reportWorkspaceCandidateInventory,
+  type InspectWorkspaceCandidateInventoryInput,
+  type ReportWorkspaceCandidateInventoryInput,
+  type WorkspaceCandidateDisposition,
+  type WorkspaceCandidateInventory,
+  type WorkspaceCandidateInventoryItem,
+} from "./workspace/orphans.js";
+export {
   DRIVE9_WORKSPACE_BARRIER_PROTOCOL,
   DRIVE9_WORKSPACE_PROTOCOL_VERSION,
   type Drive9Effect,
