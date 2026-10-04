@@ -424,20 +424,25 @@ Repository maintainers can run the opt-in live recovery gate with an
 authenticated Drive9 CLI configuration:
 
 ```bash
+bash scripts/install-pinned-drive9-sdk.sh
 DRIVE9_E2E_REQUIRED=1 npm run e2e:recovery-crossproc
 ```
 
 It creates published and later orphan LayerFS generations on the real Drive9
 service, runs `recoverWorkspace()`, and launches a second Node process with its
 own client connection to verify the recovered bytes and exact checkpoint
-lineage. Required mode fails instead of skipping when the authenticated backend
-is unavailable, and the run fails if any created layer remains active after
-cleanup. This test proves the real restore-by-fork workspace path; it still uses
-in-memory Pi Storage in explicit single-coordinator preview mode and therefore
-does not prove server-enforced writer-epoch fencing. Until a post-`0.1.4`
-Drive9 SDK package containing the LayerFS
-fork/delete methods is published, the E2E uses a test-only raw HTTP bridge for
-those two already-deployed server operations.
+lineage. It also forks a Pi child at the first parent publication, advances the
+parent to a second publication, and proves that parent and child recover their
+different checkpoint-pinned bytes from independent processes. Required mode
+fails instead of skipping when the authenticated backend is unavailable, and
+the run fails if any created layer remains active after cleanup.
+
+This test uses the real Drive9 SDK methods; it has no raw HTTP fallback. Until
+a post-`0.1.4` Drive9 SDK package containing LayerFS fork/delete is published,
+the repository-only install script builds and overlays the exact reviewed SDK
+commit without changing the public dependency or npm tarball. The E2E still
+uses in-memory Pi Storage in explicit single-coordinator preview mode and
+therefore does not prove server-enforced writer-epoch fencing.
 
 ### Workspace candidate inventory (preview)
 
