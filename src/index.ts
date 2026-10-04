@@ -28,6 +28,9 @@ export {
   type Drive9SingleCoordinatorStorageOptions,
 } from "./storage/jsonl-preview.js";
 export {
+  type Drive9ClientLeasePreviewOptions,
+} from "./storage/client-lease.js";
+export {
   requireServerFencedStorage,
   storageProfile,
   type Drive9StorageProfile,

@@ -38,6 +38,8 @@ interface MemoryNode {
 
 class MemoryDrive9Client implements Drive9DurableFileSystemClient {
   readonly nodes = new Map<string, MemoryNode>();
+  afterAppend: ((path: string) => Promise<void>) | undefined;
+  afterRevisionWrite: ((path: string) => Promise<void>) | undefined;
   private nextRevision = 1;
 
   constructor(readonly root: string) {
@@ -53,6 +55,24 @@ class MemoryDrive9Client implements Drive9DurableFileSystemClient {
   async write(path: string, data: Uint8Array): Promise<void> {
     this.requireDirectory(posix.dirname(path));
     this.nodes.set(path, this.node(data, false, 0o100600));
+  }
+
+  async writeWithRevision(
+    path: string,
+    data: Uint8Array,
+    options: { expectedRevision: number },
+  ): Promise<number> {
+    this.requireDirectory(posix.dirname(path));
+    const existing = this.nodes.get(path);
+    if (options.expectedRevision === 0) {
+      if (existing !== undefined) throw new StatusError(409, `already exists: ${path}`);
+    } else if (existing === undefined || existing.revision !== options.expectedRevision) {
+      throw new StatusError(409, `revision conflict: ${path}`);
+    }
+    const node = this.node(data, false, existing?.mode ?? 0o100600);
+    this.nodes.set(path, node);
+    await this.afterRevisionWrite?.(path);
+    return node.revision;
   }
 
   async createFile(path: string): Promise<number> {
@@ -72,6 +92,7 @@ class MemoryDrive9Client implements Drive9DurableFileSystemClient {
     combined.set(previous);
     combined.set(data, previous.byteLength);
     this.nodes.set(path, this.node(combined, false, existing?.mode ?? 0o100600));
+    await this.afterAppend?.(path);
   }
 
   async list(path: string): Promise<Drive9FileEntry[]> {
@@ -140,6 +161,10 @@ class MemoryDrive9Client implements Drive9DurableFileSystemClient {
     }
   }
 
+  provisionDirectory(path: string): void {
+    if (!this.nodes.has(path)) this.nodes.set(path, this.node(new Uint8Array(), true, 0o40700));
+  }
+
   private node(data: Uint8Array, isDir: boolean, mode: number): MemoryNode {
     return {
       data: Uint8Array.from(data),
@@ -172,6 +197,44 @@ async function openStorage(client: MemoryDrive9Client) {
     },
     context,
   );
+}
+
+function leasePath(client: MemoryDrive9Client): string {
+  return posix.join(posix.dirname(client.root), "lease.json");
+}
+
+async function openLeasedStorage(client: MemoryDrive9Client, holderId: string) {
+  client.provisionDirectory(posix.dirname(client.root));
+  return await openDrive9SingleCoordinatorStorage(
+    {
+      client,
+      stateRoot: client.root,
+      coordination: {
+        kind: "drive9-cas-lease-preview",
+        holderId,
+        leasePath: leasePath(client),
+        leaseDurationMs: 60_000,
+        renewIntervalMs: 30_000,
+      },
+    },
+    context,
+  );
+}
+
+async function leaseRecord(client: MemoryDrive9Client): Promise<Record<string, unknown>> {
+  return JSON.parse(Buffer.from(await client.read(leasePath(client))).toString("utf8")) as Record<string, unknown>;
+}
+
+async function replaceLease(
+  client: MemoryDrive9Client,
+  transform: (record: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> {
+  const path = leasePath(client);
+  const current = await leaseRecord(client);
+  const stat = await client.stat(path);
+  await client.writeWithRevision(path, Buffer.from(`${JSON.stringify(transform(current))}\n`, "utf8"), {
+    expectedRevision: stat.revision,
+  });
 }
 
 const conformance = createStorageConformance({
@@ -244,6 +307,294 @@ describe("Drive9 single-coordinator storage", () => {
       ),
       /coordination must be externally-exclusive/,
     );
+  });
+
+  it("acquires one cooperative lease and rejects a second live coordinator", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-1/state");
+    const first = await openLeasedStorage(client, "holder-a");
+    try {
+      assert.deepEqual(storageProfile(first), { kind: "single-coordinator-preview" });
+      await assert.rejects(
+        openLeasedStorage(client, "holder-b"),
+        (error: unknown) =>
+          error instanceof Drive9ProtocolError &&
+          error.code === "session_already_open" &&
+          /holder-a/.test(error.message),
+      );
+    } finally {
+      await first.close(context);
+    }
+  });
+
+  it("releases by revision CAS so a new coordinator can acquire immediately", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-2/state");
+    const first = await openLeasedStorage(client, "holder-a");
+    const firstLease = await leaseRecord(client);
+    await first.close(context);
+    assert.equal((await leaseRecord(client)).expiresAtMs, 0);
+
+    const second = await openLeasedStorage(client, "holder-b");
+    try {
+      const secondLease = await leaseRecord(client);
+      assert.equal(secondLease.holderId, "holder-b");
+      assert.equal(secondLease.epoch, Number(firstLease.epoch) + 1);
+    } finally {
+      await second.close(context);
+    }
+  });
+
+  it("renews the cooperative lease before a commit", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-renew/state");
+    const storage = await openLeasedStorage(client, "holder-a");
+    const shortenedExpiry = Date.now() + 1_000;
+    await replaceLease(client, (record) => ({ ...record, expiresAtMs: shortenedExpiry }));
+    try {
+      await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+      assert.ok(Number((await leaseRecord(client)).expiresAtMs) > shortenedExpiry);
+    } finally {
+      await storage.close(context);
+    }
+  });
+
+  it("reconciles an acquisition acknowledgement lost after the lease lands", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-acquire-ack/state");
+    client.provisionDirectory(posix.dirname(client.root));
+    let loseAcknowledgement = true;
+    client.afterRevisionWrite = async (path) => {
+      if (!loseAcknowledgement || path !== leasePath(client)) return;
+      loseAcknowledgement = false;
+      throw new Error("acquisition acknowledgement lost");
+    };
+
+    const storage = await openLeasedStorage(client, "holder-a");
+    try {
+      assert.equal((await leaseRecord(client)).holderId, "holder-a");
+    } finally {
+      client.afterRevisionWrite = undefined;
+      await storage.close(context);
+    }
+  });
+
+  it("reconciles a renewal acknowledgement lost after the renewed lease lands", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-renew-ack/state");
+    const storage = await openLeasedStorage(client, "holder-a");
+    let loseAcknowledgement = true;
+    client.afterRevisionWrite = async (path) => {
+      if (!loseAcknowledgement || path !== leasePath(client)) return;
+      loseAcknowledgement = false;
+      throw new Error("renewal acknowledgement lost");
+    };
+    try {
+      await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+      assert.deepEqual(await storage.conversation(ROOT_CONVERSATION_ID, context), {
+        id: ROOT_CONVERSATION_ID,
+      });
+    } finally {
+      client.afterRevisionWrite = undefined;
+      await storage.close(context);
+    }
+  });
+
+  it("rejects a stale coordinator before it mutates JSONL state", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-3/state");
+    const storage = await openLeasedStorage(client, "holder-a");
+    await replaceLease(client, (record) => ({
+      ...record,
+      holderId: "holder-b",
+      leaseId: "successor-lease",
+      epoch: Number(record.epoch) + 1,
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    const stateBefore = [...client.nodes.keys()].filter((path) => path.startsWith(`${client.root}/`));
+    try {
+      await assert.rejects(
+        storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context),
+        (error: unknown) => error instanceof Drive9ProtocolError && error.code === "session_lease_lost",
+      );
+      assert.deepEqual(
+        [...client.nodes.keys()].filter((path) => path.startsWith(`${client.root}/`)),
+        stateBefore,
+      );
+      assert.equal((await leaseRecord(client)).holderId, "holder-b");
+    } finally {
+      await storage.close(context);
+    }
+    assert.equal((await leaseRecord(client)).holderId, "holder-b");
+  });
+
+  it("allows expired takeover but makes the old coordinator fail closed", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-4/state");
+    const first = await openLeasedStorage(client, "holder-a");
+    await replaceLease(client, (record) => ({ ...record, expiresAtMs: 0 }));
+    const second = await openLeasedStorage(client, "holder-b");
+    try {
+      await assert.rejects(
+        first.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context),
+        (error: unknown) => error instanceof Drive9ProtocolError && error.code === "session_lease_lost",
+      );
+      await second.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+      assert.deepEqual(await second.conversation(ROOT_CONVERSATION_ID, context), {
+        id: ROOT_CONVERSATION_ID,
+      });
+    } finally {
+      await first.close(context);
+      await second.close(context);
+    }
+  });
+
+  it("poisons further commits when lease ownership changes during a JSONL commit", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-5/state");
+    const storage = await openLeasedStorage(client, "holder-a");
+    let replaced = false;
+    client.afterAppend = async (path) => {
+      if (replaced || path !== `${client.root}/main.jsonl`) return;
+      replaced = true;
+      await replaceLease(client, (record) => ({
+        ...record,
+        holderId: "holder-b",
+        leaseId: "successor-during-commit",
+        epoch: Number(record.epoch) + 1,
+        expiresAtMs: Date.now() + 60_000,
+      }));
+    };
+    try {
+      await assert.rejects(
+        storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context),
+        (error: unknown) => error instanceof Drive9ProtocolError && error.code === "session_poisoned",
+      );
+      assert.equal(replaced, true);
+      assert.ok(client.nodes.has(`${client.root}/main.jsonl`));
+      await assert.rejects(
+        storage.commit([], context),
+        (error: unknown) => error instanceof Drive9ProtocolError && error.code === "session_poisoned",
+      );
+    } finally {
+      client.afterAppend = undefined;
+      await storage.close(context);
+    }
+  });
+
+  it("fails closed on a malformed lease record", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-6/state");
+    client.provisionDirectory(posix.dirname(client.root));
+    await client.writeWithRevision(leasePath(client), Buffer.from("not-json", "utf8"), { expectedRevision: 0 });
+    await assert.rejects(
+      openLeasedStorage(client, "holder-a"),
+      (error: unknown) => error instanceof Drive9ProtocolError && error.code === "invalid_protocol_record",
+    );
+  });
+
+  it("reports malformed persisted lease fields as protocol records", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-fields/state");
+    client.provisionDirectory(posix.dirname(client.root));
+    await client.writeWithRevision(
+      leasePath(client),
+      Buffer.from(
+        `${JSON.stringify({
+          version: 1,
+          stateRoot: client.root,
+          holderId: "holder-a",
+          leaseId: "lease-a",
+          epoch: 0,
+          expiresAtMs: Date.now() + 60_000,
+        })}\n`,
+        "utf8",
+      ),
+      { expectedRevision: 0 },
+    );
+    await assert.rejects(
+      openLeasedStorage(client, "holder-b"),
+      (error: unknown) => error instanceof Drive9ProtocolError && error.code === "invalid_protocol_record",
+    );
+  });
+
+  it("requires revision CAS support for cooperative lease mode", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-lease-7/state");
+    client.provisionDirectory(posix.dirname(client.root));
+    Object.defineProperty(client, "writeWithRevision", { value: undefined });
+    const withoutCAS = client as Drive9DurableFileSystemClient;
+    await assert.rejects(
+      openDrive9SingleCoordinatorStorage(
+        {
+          client: withoutCAS,
+          stateRoot: client.root,
+          coordination: {
+            kind: "drive9-cas-lease-preview",
+            holderId: "holder-a",
+            leasePath: leasePath(client),
+            leaseDurationMs: 60_000,
+            renewIntervalMs: 30_000,
+          },
+        },
+        context,
+      ),
+      /requires client\.writeWithRevision/,
+    );
+  });
+
+  it("rejects invalid coordination values deterministically", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-invalid-coordination/state");
+    await assert.rejects(
+      openDrive9SingleCoordinatorStorage(
+        {
+          client,
+          stateRoot: client.root,
+          coordination: null as never,
+        },
+        context,
+      ),
+      /coordination must be externally-exclusive or drive9-cas-lease-preview/,
+    );
+  });
+
+  it("rejects invalid cooperative lease options before creating a lease", async () => {
+    const client = new MemoryDrive9Client("/.drive9-pi/sessions/session-invalid-lease/state");
+    client.provisionDirectory(posix.dirname(client.root));
+    const invalid = [
+      {
+        kind: "drive9-cas-lease-preview" as const,
+        holderId: "",
+        leasePath: leasePath(client),
+        leaseDurationMs: 60_000,
+        renewIntervalMs: 30_000,
+      },
+      {
+        kind: "drive9-cas-lease-preview" as const,
+        holderId: "holder-a",
+        leasePath: `${client.root}/lease.json`,
+        leaseDurationMs: 60_000,
+        renewIntervalMs: 30_000,
+      },
+      {
+        kind: "drive9-cas-lease-preview" as const,
+        holderId: "holder-a",
+        leasePath: leasePath(client),
+        leaseDurationMs: 0,
+        renewIntervalMs: 1,
+      },
+      {
+        kind: "drive9-cas-lease-preview" as const,
+        holderId: "holder-a",
+        leasePath: leasePath(client),
+        leaseDurationMs: 1_000,
+        renewIntervalMs: 1_000,
+      },
+    ];
+
+    for (const coordination of invalid) {
+      await assert.rejects(
+        openDrive9SingleCoordinatorStorage(
+          {
+            client,
+            stateRoot: client.root,
+            coordination,
+          },
+          context,
+        ),
+        TypeError,
+      );
+    }
+    assert.equal(client.nodes.has(leasePath(client)), false);
   });
 
   it("fails closed when the pre-provisioned state root is missing", async () => {

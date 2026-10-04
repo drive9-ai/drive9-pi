@@ -4,6 +4,7 @@ export { Drive9ProtocolError, type Drive9ProtocolErrorCode, } from "./core/error
 export { Drive9SdkExecutionEnv, type Drive9SdkExecutionEnvOptions, } from "./environment/sdk-environment.js";
 export { createDrive9DurableExtension, DRIVE9_DURABLE_EXTENSION_NAME, type Drive9DurableExtensionOptions, } from "./extension/durable-extension.js";
 export { openDrive9SingleCoordinatorStorage, type Drive9SingleCoordinatorStorageOptions, } from "./storage/jsonl-preview.js";
+export { type Drive9ClientLeasePreviewOptions, } from "./storage/client-lease.js";
 export { requireServerFencedStorage, storageProfile, type Drive9StorageProfile, } from "./storage/profile.js";
 export { createDrive9ResultStore, Drive9ResultStoreBackend, type CreateDrive9ResultStoreOptions, type Drive9ResultClient, type Drive9ResultStoreBackendOptions, } from "./drive9-result-backend.js";
 export { verifyEvidenceIsolation, type EvidenceIsolationOptions, type EvidenceIsolationReceipt, type EvidenceProbeClient, } from "./evidence-isolation.js";

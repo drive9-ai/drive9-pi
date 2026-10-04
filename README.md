@@ -358,9 +358,9 @@ does not promise branch, checkpoint, or rollback semantics.
 ### Pi durable state storage (single-coordinator preview)
 
 `openDrive9SingleCoordinatorStorage()` runs Pi 1.0's portable `JsonlStorage`
-on an existing, dedicated Drive9 state directory. The caller must explicitly select
-`coordination: "externally-exclusive"` and keep that root exclusive for the
-entire storage lifetime:
+on an existing, dedicated Drive9 state directory. The strictest preview mode
+requires the caller to keep that root externally exclusive for the entire
+storage lifetime:
 
 ```ts
 import { Client } from "drive9";
@@ -376,13 +376,47 @@ const storage = await openDrive9SingleCoordinatorStorage(
 );
 ```
 
+Callers that cannot provide an external coordinator may opt into a cooperative
+revision-CAS lease. The lease path must be outside `stateRoot`, its parent must
+already exist, and the runtime credential must be able to read, stat, and CAS
+that path:
+
+```ts
+const storage = await openDrive9SingleCoordinatorStorage(
+  {
+    client: Client.defaultClient(),
+    stateRoot: "/.drive9-pi/sessions/session-42/state",
+    coordination: {
+      kind: "drive9-cas-lease-preview",
+      holderId: runtimeId,
+      leasePath: "/.drive9-pi/sessions/session-42/lease.json",
+      leaseDurationMs: 60_000,
+      renewIntervalMs: 20_000,
+    },
+  },
+  context,
+);
+```
+
+The cooperative mode uses Drive9 revision CAS to acquire, renew, and
+best-effort release one lease. It rejects an ordinary second live opener,
+checks ownership before and after every Pi commit, and permanently poisons the
+opened adapter if ownership cannot be verified after a commit. An expired
+record can be claimed with a higher advisory epoch. All participating writers
+must use the lease and need sufficiently aligned wall clocks.
+
 This adapter passes Pi's `StorageConformance` suite and can recover committed
-JSONL state after reopening the same namespace. It is not a lease or a stale
-writer fence: it provides no automatic expiry takeover, permits no concurrent
-session writers, and is rejected by stable Drive9 publication mode. Use
-`storageProfile()` to inspect that machine-readable
-`single-coordinator-preview` classification. A stable multi-process adapter
-still requires a server-enforced writer epoch on every Pi storage commit.
+JSONL state after reopening the same namespace. Neither coordination mode is a
+storage-enforced stale-writer fence. A process can lose the lease while a
+multi-file JSONL commit is already in flight; the post-commit check detects and
+poisons that process but cannot undo bytes that already landed. A delayed old
+process is not atomically rejected by Drive9 after lease-expiry takeover.
+Therefore this adapter remains rejected by stable Drive9 publication mode and
+does not promise safe automatic takeover or multi-writer operation. Use
+`storageProfile()` to inspect its machine-readable
+`single-coordinator-preview` classification. Stable multi-process publication
+still requires a backend transaction that enforces the writer epoch on every
+Pi commit.
 Because this SDK/HTTP profile exposes no public truncate-to-N primitive (the
 Drive9 server can truncate to any length over a FUSE mount, but that is a
 separate ExecutionEnv), a process crash that leaves a partial JSONL tail after

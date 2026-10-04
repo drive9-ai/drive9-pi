@@ -43,6 +43,11 @@ export interface Drive9DurableFileSystemClient {
   read(path: string): Promise<Uint8Array>;
   readStream?(path: string): Promise<ReadableStream<Uint8Array>>;
   write(path: string, data: Uint8Array): Promise<void>;
+  writeWithRevision?(
+    path: string,
+    data: Uint8Array,
+    options: { expectedRevision: number },
+  ): Promise<number>;
   createFile?(path: string): Promise<number>;
   append(path: string, data: Uint8Array): Promise<void>;
   list(path: string): Promise<Drive9FileEntry[]>;
