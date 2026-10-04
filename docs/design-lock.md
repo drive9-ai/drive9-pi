@@ -313,3 +313,12 @@ A releasable head must prove:
     acknowledgement precedes tool success visibility; and the next mutation
     starts from the recovered bytes. These tests do not replace the separate
     real-Drive9, cross-process durability gate.
+17. the required-mode real-Drive9 recovery gate uses two independent Node
+    processes and client connections, forks from the publication selector's
+    checkpoint instead of a later orphan checkpoint, verifies exact bytes and
+    lineage from the second process, performs no backend mutation on a
+    publication breach, and fails when authenticated backend access or cleanup
+    verification is unavailable. This closes the real workspace
+    restore-by-fork gate only; server-enforced Pi Storage writer fencing and a
+    published SDK containing the LayerFS fork/delete methods remain separate
+    release prerequisites.
