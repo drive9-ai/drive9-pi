@@ -441,7 +441,6 @@ Repository maintainers can run the opt-in live recovery gate with an
 authenticated Drive9 CLI configuration:
 
 ```bash
-bash scripts/install-pinned-drive9-sdk.sh
 DRIVE9_E2E_REQUIRED=1 npm run e2e:recovery-crossproc
 ```
 
@@ -454,10 +453,9 @@ different checkpoint-pinned bytes from independent processes. Required mode
 fails instead of skipping when the authenticated backend is unavailable, and
 the run fails if any created layer remains active after cleanup.
 
-This test uses the real Drive9 SDK methods; it has no raw HTTP fallback. Until
-a post-`0.1.4` Drive9 SDK package containing LayerFS fork/delete is published,
-the repository-only install script builds and overlays the exact reviewed SDK
-commit without changing the public dependency or npm tarball. The E2E still
+This test uses the real Drive9 SDK methods; it has no raw HTTP fallback. The
+LayerFS fork/delete/list methods it exercises ship in the `drive9 ^0.2.0`
+dependency, so no overlay or repository-only install is required. The E2E still
 uses in-memory Pi Storage in explicit single-coordinator preview mode and
 therefore does not prove server-enforced writer-epoch fencing.
 
