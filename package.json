@@ -49,6 +49,7 @@
     "check": "tsc --noEmit",
     "check:e2e": "tsc --noEmit -p tsconfig.e2e.json",
     "demo:drive9": "tsx e2e/pi-drive9-demo.ts",
+    "e2e:pi-consume-crash": "node --check e2e/pi-consume-crash-consumer.mjs && tsx e2e/pi-consume-crash.ts",
     "e2e:recovery-crossproc": "tsx e2e/workspace-recovery-crossproc.ts",
     "test": "tsx --test test/*.test.ts",
     "release:check": "bash scripts/release-public.sh --check",

@@ -44,6 +44,27 @@ export DRIVE9_API_KEY="d9_..."
 particular, `.pi/drive9.json` contains only non-secret project settings and can
 be shared independently of each teammate's Drive9 credentials.
 
+## Runtime Profiles and Performance
+
+The direct SDK profile is a correctness-first path for file-only, headless, or
+low-frequency agents. It sends filesystem and preview JSONL state operations
+through remote SDK requests, does not provide a shell, and does not inherit the
+Drive9 CLI/FUSE mount's local caches, writeback batching, metadata prefetch, or
+mount-level coordination. Passing the real-backend recovery gates proves the
+documented durability and recovery boundaries; it is not a coding-agent
+performance claim.
+
+The intended coding-agent target is a mounted workspace where Pi file tools and
+shell commands share one Drive9 mount. That profile remains preview and is not
+implemented as a stable durable runtime here because Drive9 does not yet expose
+the required atomic quiesce-plus-checkpoint barrier.
+
+Pi's JSONL-over-SDK storage adapter is likewise a preview correctness bridge,
+not the long-term state architecture. Production multi-process Pi state should
+use native transactional or batched storage so one logical Pi commit is fenced
+and persisted as one backend transaction rather than many remote file
+operations.
+
 ## Configure a Project
 
 Start Pi from the local project that should use Drive9:
@@ -492,6 +513,42 @@ LayerFS fork/delete/list methods it exercises ship in the `drive9 ^0.2.0`
 dependency, so no overlay or repository-only install is required. The E2E still
 uses in-memory Pi Storage in explicit single-coordinator preview mode and
 therefore does not prove server-enforced writer-epoch fencing.
+
+Repository maintainers can run the complete clean-consumer crash gate with an
+authenticated Drive9 CLI configuration:
+
+```bash
+DRIVE9_E2E_REQUIRED=1 npm run e2e:pi-consume-crash
+```
+
+The gate packs this repository, installs the tarball and released
+`drive9@0.2.0` into a fresh npm project, and imports `@drive9/drive9-pi` only through
+its public package root. It composes Pi's real `Harness` and native
+`CodingTools`, mints disjoint short-lived workspace/state/evidence credentials,
+and keeps the owner credential out of every worker process. Real worker
+processes are killed with `SIGKILL` after a dirty write, after checkpoint
+creation, and after candidate persistence. Independent restart processes must
+recover the exact last-published bytes, exclude unpublished effects, and begin
+the next mutation from the recovered head. A separate inverse case persists Pi
+terminal success without its matching candidate and requires a fail-closed
+`publication_breach` before any workspace read or mutation. The test uses no
+visibility sleeps, retries, mock backend, local-filesystem fallback, or host
+shell fallback. Without backend credentials it reports `SKIP`; required mode
+turns that condition into failure.
+
+Only model output is scripted, through Pi AI's public provider API; Pi's real
+Harness, ToolTasks, native CodingTools, storage, and extension wrappers execute
+unchanged. This avoids the Pi AI 0.84 faux provider's inability to serialize
+Pi Durable 1.0 system entries. The live no-retry state path currently measures
+roughly three seconds per append in the release environment, so each observable
+worker phase has a six-minute hard timeout and each worker has a thirty-minute
+total ceiling. `DRIVE9_PI_WORKER_TIMEOUT_MS` and
+`DRIVE9_PI_WORKER_TOTAL_TIMEOUT_MS` may lower or raise those explicit bounds;
+an exceeded bound always kills the worker and fails the gate.
+On a local fake-DNS proxy that resets long-lived TLS traffic, maintainers may
+set `DRIVE9_PI_E2E_API_ADDRESS` to a separately verified current address for
+`api.drive9.ai`; the test preserves the hostname and TLS SNI and still performs
+each Drive9 operation exactly once.
 
 ### Workspace candidate inventory (preview)
 
