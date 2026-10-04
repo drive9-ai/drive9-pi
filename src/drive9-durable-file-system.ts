@@ -343,13 +343,22 @@ export class Drive9DurableFileSystem implements FileSystem {
   /**
    * Truncate or extend a file to exactly `size` bytes.
    *
-   * The Drive9 SDK/server has NO truncate primitive — only a whole-object PUT
-   * (create+truncate semantics) via `write`. We honor ONLY the `size === 0`
-   * case, which a zero-byte write expresses exactly. For any other size we
-   * return `not_supported` rather than emulate truncate with a read-modify-write
-   * (which would silently race concurrent writers, double the data transfer, and
-   * misrepresent a missing primitive as present). A real `truncateFile(path,size)`
-   * must be added to the Drive9 server/SDK before this can be a stable capability.
+   * Capability is profile-specific. The Drive9 *server* can truncate to an
+   * arbitrary length — its JuiceFS metadata layer implements it (`jfsTruncateTx`
+   * in tidbcloud/fs `pkg/datastore/jfs.go`), reached over a FUSE mount via the
+   * VFS `SetAttr`/`FATTR_SIZE` path. But this adapter speaks the **SDK/HTTP
+   * profile**, whose public surface (`write`, i.e. a whole-object PUT with
+   * create+truncate semantics) exposes **no truncate-to-N primitive**. On this
+   * profile we therefore honor ONLY the `size === 0` case, which a zero-byte
+   * write expresses exactly; for any nonzero size we return `not_supported`.
+   *
+   * We deliberately do NOT emulate nonzero truncate with a read-modify-write: it
+   * would silently race concurrent writers, double the data transfer, and
+   * misrepresent a missing primitive as present. Lighting up nonzero truncate on
+   * this profile requires a real typed truncate primitive on the Drive9 JS SDK +
+   * a server HTTP endpoint (with defined shrink/grow + zero-fill, revision/size/
+   * quota/CAS, and concurrent-write fail-closed semantics); a FUSE mount is a
+   * separate ExecutionEnv, not this adapter.
    */
   async truncateFile(path: string, size: number, context: Context): Promise<Result<void, FileError>> {
     if (!Number.isSafeInteger(size) || size < 0) {
@@ -359,7 +368,7 @@ export class Drive9DurableFileSystem implements FileSystem {
       return err(
         new FileError(
           "not_supported",
-          "Drive9 has no native truncate-to-size primitive; only truncation to 0 bytes is supported",
+          "Drive9 SDK/HTTP profile exposes no truncate-to-size primitive; only truncation to 0 bytes is supported on this profile",
           this.safeAddress(path),
         ),
       );
