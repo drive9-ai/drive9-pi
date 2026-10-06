@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-08-28T04:04:52.020Z",
+  "repoHead": "988b80f",
+  "rounds": {
+    "compactReference": {
+      "rawBytes": 1470195,
+      "compactBytes": 2048,
+      "reductionRatio": 0.9986,
+      "resultId": "r1_8fee7e015f1d450708b2bf1cb16f58b0f58beac7e245e03039fb752723dbc592",
+      "hiddenMarkersAbsentFromContext": true
+    },
+    "targetedSearch": {
+      "totalModelVisibleBytes": 3205,
+      "hiddenMarkersFound": true
+    },
+    "boundedRead": {
+      "totalModelVisibleBytes": 5786,
+      "hiddenMarkersFound": true
+    },
+    "failureAndReplay": {
+      "stableResultIdOnReplay": true,
+      "smallResultInline": true,
+      "evidenceReaderResultsNotRecursivelyOffloaded": true,
+      "crossSessionDenied": true
+    },
+    "repeatedSizes": [
+      {
+        "lineCount": 500,
+        "rawBytes": 73695,
+        "compactBytes": 2048,
+        "reductionRatio": 0.9722,
+        "searchBytes": 3179,
+        "readBytes": 5755,
+        "resultId": "r1_9db1810adf3f76d1936ad3af8da6d780b456f5d1def757e36aed360d7aa7ffb4"
+      },
+      {
+        "lineCount": 10000,
+        "rawBytes": 1470195,
+        "compactBytes": 2048,
+        "reductionRatio": 0.9986,
+        "searchBytes": 3205,
+        "readBytes": 5786,
+        "resultId": "r1_8fee7e015f1d450708b2bf1cb16f58b0f58beac7e245e03039fb752723dbc592"
+      },
+      {
+        "lineCount": 50000,
+        "rawBytes": 7350195,
+        "compactBytes": 2048,
+        "reductionRatio": 0.9997,
+        "searchBytes": 3220,
+        "readBytes": 5805,
+        "resultId": "r1_56a1449930dc93864ef6c7ec31d6004c13751ceb89546f7a21a0b8d3a22342b8"
+      }
+    ]
+  },
+  "contextBudgetComparison": {
+    "oneRawToolResultBytes": 1470195,
+    "oneReferenceMessageBytes": 2048,
+    "fiveRawToolResultsBytes": 7350975,
+    "fiveReferenceMessagesBytes": 10240
+  }
+}
