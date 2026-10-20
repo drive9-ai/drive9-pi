@@ -11,30 +11,73 @@ import {
   Drive9DurableFileSystem,
   type Drive9DurableFileSystemOptions,
 } from "../drive9-durable-file-system.js";
+import {
+  createDrive9RuntimeExec,
+  type Drive9RuntimeExecClient,
+  type RuntimeSpillSink,
+} from "./runtime-shell.js";
 
-export type Drive9SdkExecutionEnvOptions = Drive9DurableFileSystemOptions;
+export type Drive9SdkExecutionEnvOptions = Drive9DurableFileSystemOptions & {
+  /**
+   * The SAME authenticated Drive9 object that backs the filesystem, also
+   * exposing Runtime `exec`. Supply it to enable ordinary-root shell execution:
+   * a command then addresses the identical namespace as the file tools
+   * (`workspace.root = root`, no `layer_id`). Omit to keep shell execution
+   * fail-closed (`shell_unavailable`).
+   */
+  runtime?: Drive9RuntimeExecClient;
+};
 
 /**
- * Pi 1.0 environment for file-only agents using the Drive9 SDK directly.
+ * Pi 1.0 environment for agents using the Drive9 SDK directly (ordinary root).
  *
- * The filesystem and environment share one namespace identity. Shell execution
- * always fails closed; commands never fall through to the host process.
- *
- * This environment remains preview until Drive9 SDK acknowledgement durability
- * is proven against a real backend from another process.
+ * The filesystem and the shell share ONE authenticated client and the same
+ * ordinary Drive9 root: a command run through `exec` sees files the agent wrote
+ * via the filesystem, and vice versa. Without a `runtime` client, shell
+ * execution fails closed; commands never fall through to the host process.
+ * LayerFS and the coding-agent host-temp bash path are out of scope
+ * (see docs/design/runtime-exec-integration.md).
  */
 export class Drive9SdkExecutionEnv extends Drive9DurableFileSystem implements ExecutionEnv {
+  readonly #exec?: ReturnType<typeof createDrive9RuntimeExec>;
+
+  constructor(options: Drive9SdkExecutionEnvOptions) {
+    super(options);
+    if (options.runtime !== undefined) {
+      const spill: RuntimeSpillSink = {
+        create: async (context) => {
+          const created = await this.createTempFile({ prefix: "runtime-exec-", suffix: ".log" }, context);
+          if (!created.ok) throw created.error;
+          return created.value;
+        },
+        append: async (path, bytes, context) => {
+          const appended = await this.appendFile(path, bytes, context);
+          if (!appended.ok) throw appended.error;
+        },
+      };
+      this.#exec = createDrive9RuntimeExec({
+        client: options.runtime,
+        root: this.root,
+        cwd: this.cwd,
+        spill,
+      });
+    }
+  }
+
   async exec(
-    _command: string,
-    _options: ShellExecOptions | undefined,
+    command: string,
+    options: ShellExecOptions | undefined,
     context: Context,
   ): Promise<Result<ShellExecResult, ExecutionError>> {
-    if (context.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
-    return err(
-      new ExecutionError(
-        "shell_unavailable",
-        "Drive9SdkExecutionEnv provides filesystem access only; shell execution is unavailable",
-      ),
-    );
+    if (this.#exec === undefined) {
+      if (context.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
+      return err(
+        new ExecutionError(
+          "shell_unavailable",
+          "Drive9SdkExecutionEnv has no Runtime client; shell execution is unavailable",
+        ),
+      );
+    }
+    return await this.#exec(command, options, context);
   }
 }

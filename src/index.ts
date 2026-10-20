@@ -18,6 +18,7 @@ export {
   Drive9SdkExecutionEnv,
   type Drive9SdkExecutionEnvOptions,
 } from "./environment/sdk-environment.js";
+export type { Drive9RuntimeExecClient } from "./environment/runtime-shell.js";
 export {
   createDrive9DurableExtension,
   DRIVE9_DURABLE_EXTENSION_NAME,
