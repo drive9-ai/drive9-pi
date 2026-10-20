@@ -22,7 +22,9 @@ available only through the separate Pi 1.0 SDK execution environment below.
 
 For Pi 1.0, the package also exports a preview `Drive9SdkExecutionEnv`. It is
 an SDK-backed filesystem plus a Runtime-backed shell over the same authenticated
-client and exact ordinary Drive9 root. It never falls back to a host process.
+client and Drive9 drive. The configured root confines Pi file tools and selects
+the command start directory, but current Runtime mounts the whole drive; root is
+not an exec ACL. It never falls back to a host process.
 
 `createDrive9PiIntegration` remains a lower-level agent-core preset. It binds
 Pi's harness read/write/edit/list tools to a private file-only environment,
@@ -96,11 +98,14 @@ inventing a second namespace or host fallback:
 - one injected client object must satisfy both the filesystem and Runtime exec
   contracts; a separate Runtime client is not accepted;
 - Runtime receives `workspace.root = environment.root` and no `layer_id`;
+- filesystem paths are root-confined, while Runtime commands can traverse the
+  whole authenticated drive; callers use a separate tenant/drive for isolation;
 - commands are passed unchanged through the SDK `command` field, cwd is read
   live and contained within the root, and no host environment is copied;
 - output uses independent streaming UTF-8 decoders and, when either byte or
   complete-or-partial-line threshold is crossed, spills the complete raw
-  arrival-order stream into the same Drive9 `tempRoot` with backpressure;
+  arrival-order stream into the same Drive9 `tempRoot` in 8 MiB-aligned batches
+  plus one terminal tail append, with bounded-memory backpressure;
 - spill failure triggers the SDK callback-cancel/unknown path and never degrades
   to host temporary storage or success;
 - confirmed terminal errors map to Pi's typed error surface, every unknown
@@ -348,10 +353,12 @@ A releasable head must prove:
     non-cascading logical abandon, and keeps generated layer IDs within the
     server contract;
 12. the preview SDK execution environment requires one file-plus-Runtime client,
-    binds one ordinary root, reads cwd live, preserves command/env/timeout/error
-    semantics without retry, spills complete raw output into the same Drive9
-    temp root without host fallback, and has a no-skip real-backend gate proving
-    bidirectional file visibility and verified cleanup;
+    binds one authenticated drive and configured start root, documents that
+    Runtime can traverse the whole drive, reads cwd live, preserves
+    command/env/timeout/error semantics without retry, spills complete raw
+    output into the same Drive9 temp root in 8 MiB batches without host
+    fallback, and has a no-skip real-backend gate proving bidirectional file
+    visibility and verified cleanup;
 13. the preview JSONL storage passes Pi `StorageConformance`, reopens committed
     state, exposes `single-coordinator-preview`, requires either explicit
     external exclusivity or the opt-in revision-CAS cooperative lease, checks

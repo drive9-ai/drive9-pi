@@ -2,7 +2,8 @@
 
 This document locks the V1 contract for adding Drive9 Runtime execution to the
 Pi 1.0 SDK execution environment. The target is a single environment where an
-agent's file operations and commands address the same persistent Drive9 root.
+agent's file operations and commands use the same authenticated Drive9 drive,
+with the configured root as the file-tool boundary and command start directory.
 
 The contract is grounded in Pi 1.0's `Shell`/`ExecutionEnv` types and the
 Drive9 Runtime client introduced by `mem9-ai/drive9#1022`.
@@ -14,7 +15,7 @@ V1 includes:
 - a Runtime-backed `Shell.exec` used by `Drive9SdkExecutionEnv`;
 - Pi durable's canonical bash tool, which already calls `ExecutionEnv.exec` and
   supplies output callbacks and spill thresholds; and
-- one ordinary Drive9 SDK root shared by file operations and Runtime.
+- one ordinary Drive9 SDK client/drive shared by file operations and Runtime.
 
 V1 deliberately excludes:
 
@@ -43,6 +44,22 @@ workspace: { root: environment.root }
 
 No `layer_id` is sent. The environment's public `id` remains Pi's namespace
 equality declaration; it is not used as a Runtime binding key.
+
+### Access boundary
+
+`environment.root` has two different roles that must not be conflated:
+
+- Pi filesystem methods normalize and reject every path outside that root; and
+- Runtime uses it as the command's starting directory.
+
+The current Runtime provider mounts the entire authenticated Drive9 drive at
+`/workspace`. `workspace.root` does not narrow that mount, so a command can
+traverse from its start directory to sibling paths elsewhere in the drive.
+The server also does not currently accept a narrower root-scoped credential for
+Runtime exec. Therefore this adapter does **not** claim root-level command
+isolation. Callers that execute untrusted commands must isolate them with a
+separate tenant/drive. A true root-confined exec environment requires a
+server-side Runtime mount/authentication contract and is outside this PR.
 
 ## Shell option mapping
 
@@ -91,17 +108,24 @@ The adapter provides two distinct output guarantees:
 The threshold is crossed when total bytes are greater than `afterBytes` or the
 number of complete-or-partial combined-output lines is greater than
 `afterLines`. Before that point, only the threshold-bounded prefix is retained.
-After spill starts, each Runtime output callback awaits the Drive9 append, so
-backend backpressure propagates.
+After spill starts, raw frames are coalesced in arrival order into 8 MiB
+batches, matching the Drive9 SDK native append part size. A full batch is
+appended with callback backpressure; the final partial batch is appended after
+a known terminal result. Memory added by the active spill batch is therefore
+bounded to 8 MiB instead of growing with command output, and hundreds of small
+Runtime frames do not become hundreds of Drive9 read-modify-upload cycles.
 
 The spill is readable through the same environment after `exec` returns and is
 removed best-effort by `environment.cleanup()`. It never uses host temporary
 storage and is not a `PersistentToolResultStore` record.
 
-If spill creation or append fails, the Runtime frame callback rejects. The
-Drive9 SDK attempts cancellation and reports an unknown outcome. The adapter
-must not continue callbacks, report success, fall back to host storage, or
-pretend the partial spill is complete.
+If spill creation or a full-batch append fails inside a Runtime frame callback,
+the callback rejects; the Drive9 SDK attempts cancellation and reports an
+unknown outcome. If the final partial append fails after Runtime already
+reported a terminal result, cancellation is no longer needed, but the adapter
+still returns `unknown` and never publishes an incomplete `spillPath`. Neither
+path may report success, fall back to host storage, or pretend the partial
+spill is complete.
 
 Both decoders are flushed after a known terminal result, including terminal
 Runtime execution errors. A consumer callback failure during streaming may
@@ -122,6 +146,7 @@ The adapter performs no automatic retries.
 | `RuntimeStartError` | `spawn_error` | proven not started |
 | `RuntimeOutcomeUnknownError` | `unknown` | may have started |
 | spill/frame callback failure | `unknown` | may have started; cancel attempted |
+| final spill-tail failure after terminal | `unknown` | terminal known; result output incomplete |
 | other Runtime/protocol failure | `unknown` | fail closed |
 | post-terminal decoder callback failure | `callback_error` | terminal known |
 
@@ -141,11 +166,14 @@ The SDK release-preparation PR does not itself authorize merge or publication.
 Before release, all of the following are required:
 
 - clean install, typecheck, tests, and package build against the published SDK;
-- a real Runtime-enabled, no-skip test using one SDK client and one ordinary
-  root where a filesystem write is visible to a command and a command write is
-  visible through the filesystem;
+- a real Runtime-enabled, no-skip test using one SDK client and one configured
+  start root where a filesystem write is visible to a command and a command
+  write is visible through the filesystem (this proves shared-drive visibility,
+  not root-level command isolation);
 - complete raw spill tests for byte and complete-or-partial line thresholds,
   including prefix bytes and interleaved UTF-8 frames;
+- a tens-of-MiB small-frame test proving 8 MiB-aligned batching plus one final
+  tail append rather than one Drive9 append per Runtime frame;
 - tests proving spill failures reject the Runtime callback, trigger the SDK's
   cancellation/unknown path, and stop later output;
 - discriminating tests for live cwd, option validation before network access,

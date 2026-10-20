@@ -4,8 +4,10 @@ import { type ExecOptions, type ExecRequest, type ExecResult } from "drive9";
 /**
  * The exact subset of the Drive9 SDK `Client` the shell uses. The shell is
  * constructed from the SAME authenticated object that backs the filesystem, so
- * exec addresses the identical ordinary Drive9 root (construction invariant,
- * not a guessed `id`/baseUrl match).
+ * exec addresses the same authenticated Drive9 drive and starts in the
+ * configured ordinary root (construction invariant, not a guessed
+ * `id`/baseUrl match). `workspace.root` is not a Runtime access boundary; the
+ * current server mount exposes the whole drive to the command.
  */
 export interface Drive9RuntimeExecClient {
     exec(input: ExecRequest, options?: ExecOptions): Promise<ExecResult>;
@@ -19,7 +21,7 @@ export interface RuntimeSpillSink {
 }
 export interface RuntimeShellOptions {
     client: Drive9RuntimeExecClient;
-    /** Drive9 absolute root; becomes Runtime `workspace.root`. */
+    /** Drive9 absolute start root; becomes Runtime `workspace.root`, not an ACL. */
     root: string;
     /** Read the env's live Drive9 cwd for every exec call. */
     currentCwd(): string;

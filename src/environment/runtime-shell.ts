@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/chord";
+import type { Context, ContextKey } from "@earendil-works/chord";
 import {
   err,
   ExecutionError,
@@ -23,8 +23,10 @@ import {
 /**
  * The exact subset of the Drive9 SDK `Client` the shell uses. The shell is
  * constructed from the SAME authenticated object that backs the filesystem, so
- * exec addresses the identical ordinary Drive9 root (construction invariant,
- * not a guessed `id`/baseUrl match).
+ * exec addresses the same authenticated Drive9 drive and starts in the
+ * configured ordinary root (construction invariant, not a guessed
+ * `id`/baseUrl match). `workspace.root` is not a Runtime access boundary; the
+ * current server mount exposes the whole drive to the command.
  */
 export interface Drive9RuntimeExecClient {
   exec(input: ExecRequest, options?: ExecOptions): Promise<ExecResult>;
@@ -40,7 +42,7 @@ export interface RuntimeSpillSink {
 
 export interface RuntimeShellOptions {
   client: Drive9RuntimeExecClient;
-  /** Drive9 absolute root; becomes Runtime `workspace.root`. */
+  /** Drive9 absolute start root; becomes Runtime `workspace.root`, not an ACL. */
   root: string;
   /** Read the env's live Drive9 cwd for every exec call. */
   currentCwd(): string;
@@ -48,6 +50,9 @@ export interface RuntimeShellOptions {
 }
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
+// Match drive9-js's native append part size. Full batches never require the
+// SDK to repeatedly rewrite a growing partial 8 MiB tail.
+const SPILL_APPEND_BATCH_BYTES = 8 * 1024 * 1024;
 
 type CwdResolution =
   | { kind: "root" } // run at the workspace root (no Runtime cwd field)
@@ -98,6 +103,15 @@ function spillThresholdValid(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
+/** Preserve invocation values while allowing terminal spill persistence after command cancellation. */
+function withoutAbort(context: Context): Context {
+  return {
+    abortSignal: undefined,
+    value: <T>(key: ContextKey<T>) => context.value(key),
+    toString: () => context.toString(),
+  };
+}
+
 /**
  * Build a Pi `Shell.exec` over the Drive9 Runtime exec client. See
  * docs/design/runtime-exec-integration.md (V1, ordinary SDK root).
@@ -146,11 +160,14 @@ export function createDrive9RuntimeExec(options: RuntimeShellOptions) {
     // --- Per-stream UTF-8 decoding + complete raw spill ---
     const stdoutDecoder = new TextDecoder("utf-8");
     const stderrDecoder = new TextDecoder("utf-8");
+    const terminalSpillContext = withoutAbort(context);
     let spillPath: string | undefined;
     let seenBytes = 0;
     let seenNewlines = 0;
     let spilling = false;
     const spillPrefix: Uint8Array[] = [];
+    let spillBatchBytes = 0;
+    let spillBatch: Uint8Array[] = [];
 
     const emit = (text: string) => {
       if (text.length === 0) return;
@@ -162,31 +179,67 @@ export function createDrive9RuntimeExec(options: RuntimeShellOptions) {
       }
     };
 
-    const ensureSpill = async (): Promise<string> => {
-      if (spillPath === undefined) spillPath = await options.spill.create(context);
+    const ensureSpill = async (spillContext: Context): Promise<string> => {
+      if (spillPath === undefined) spillPath = await options.spill.create(spillContext);
       return spillPath;
     };
 
-    const appendSpill = async (bytes: Uint8Array) => {
+    const createSpill = async (spillContext: Context): Promise<void> => {
       try {
-        const path = await ensureSpill();
-        await options.spill.append(path, bytes, context);
+        await ensureSpill(spillContext);
       } catch (error) {
         throw new SpillWriteError(error);
       }
     };
 
+    const appendSpill = async (bytes: Uint8Array, spillContext: Context) => {
+      try {
+        const path = await ensureSpill(spillContext);
+        await options.spill.append(path, bytes, spillContext);
+      } catch (error) {
+        throw new SpillWriteError(error);
+      }
+    };
+
+    const flushSpillBatch = async (spillContext: Context) => {
+      if (spillBatchBytes === 0) return;
+      const bytes = new Uint8Array(spillBatchBytes);
+      let offset = 0;
+      for (const part of spillBatch) {
+        bytes.set(part, offset);
+        offset += part.byteLength;
+      }
+      spillBatch = [];
+      spillBatchBytes = 0;
+      await appendSpill(bytes, spillContext);
+    };
+
+    const queueSpill = async (bytes: Uint8Array) => {
+      let offset = 0;
+      while (offset < bytes.byteLength) {
+        const take = Math.min(SPILL_APPEND_BATCH_BYTES - spillBatchBytes, bytes.byteLength - offset);
+        spillBatch.push(bytes.slice(offset, offset + take));
+        spillBatchBytes += take;
+        offset += take;
+        if (spillBatchBytes === SPILL_APPEND_BATCH_BYTES) await flushSpillBatch(context);
+      }
+    };
+
     const startSpill = async (chunk: Uint8Array) => {
       spilling = true;
-      for (const prefix of spillPrefix) await appendSpill(prefix);
+      // Create inside the Runtime frame callback so a create failure still
+      // triggers the SDK's callback-cancel/outcome-unknown path. Appends are
+      // coalesced separately into native 8 MiB-aligned batches.
+      await createSpill(context);
+      for (const prefix of spillPrefix) await queueSpill(prefix);
       spillPrefix.length = 0;
-      await appendSpill(chunk);
+      await queueSpill(chunk);
     };
 
     const onChunk = async (chunk: Uint8Array, decoder: TextDecoder) => {
       if (spillOpts !== undefined && chunk.byteLength > 0) {
         if (spilling) {
-          await appendSpill(chunk);
+          await queueSpill(chunk);
         } else {
           seenBytes += chunk.byteLength;
           for (const byte of chunk) {
@@ -222,9 +275,20 @@ export function createDrive9RuntimeExec(options: RuntimeShellOptions) {
     }
 
     // A successful exit or RuntimeExecutionError is a server terminal outcome.
-    // Flush pending decoder state before publishing that terminal result. Do
-    // not flush an outcome-unknown/callback failure as if it were terminal.
+    // Flush the final partial spill batch and decoder state before publishing
+    // that terminal result. Do not flush an outcome-unknown/callback failure as
+    // if it were terminal.
     if (!executionFailed || executionError instanceof RuntimeExecutionError) {
+      try {
+        // Runtime cancellation also aborts the invocation context. Once the
+        // server has reported a terminal outcome, persist the already received
+        // tail with the same values but without reusing that canceled signal.
+        await flushSpillBatch(terminalSpillContext);
+      } catch (error) {
+        // The command may be terminal-known, but the promised complete spill is
+        // not. Fail closed and never publish an incomplete spillPath.
+        return err(mapExecError(error, undefined));
+      }
       try {
         emit(stdoutDecoder.decode());
         emit(stderrDecoder.decode());

@@ -24,8 +24,9 @@ export interface Drive9SdkExecutionEnvClient
 export type Drive9SdkExecutionEnvOptions = Omit<Drive9DurableFileSystemOptions, "client"> & {
   /**
    * The SAME authenticated Drive9 object backs file access and Runtime exec.
-   * A command addresses the identical ordinary namespace as the file tools
-   * (`workspace.root = root`, no `layer_id`).
+   * A command uses the same authenticated drive as the file tools and starts at
+   * `root` (`workspace.root = root`, no `layer_id`). Current Runtime mounts the
+   * whole drive, so `root` is not an exec access boundary.
    */
   client: Drive9SdkExecutionEnvClient;
 };
@@ -33,9 +34,11 @@ export type Drive9SdkExecutionEnvOptions = Omit<Drive9DurableFileSystemOptions, 
 /**
  * Pi 1.0 environment for agents using the Drive9 SDK directly (ordinary root).
  *
- * The filesystem and the shell share ONE authenticated client and the same
- * ordinary Drive9 root: a command run through `exec` sees files the agent wrote
- * via the filesystem, and vice versa. Commands never fall through to the host.
+ * The filesystem and the shell share ONE authenticated client and Drive9 drive:
+ * a command run through `exec` sees files the agent wrote via the filesystem,
+ * and vice versa. Filesystem methods are root-confined, but Runtime currently
+ * exposes the whole drive and uses root only as the start directory. Commands
+ * never fall through to the host.
  * LayerFS and the coding-agent host-temp bash path are out of scope
  * (see docs/design/runtime-exec-integration.md).
  */

@@ -426,11 +426,19 @@ repair; this preview does not promise automatic crash-tail recovery.
 ### SDK execution environment (preview)
 
 `Drive9SdkExecutionEnv` combines Pi 1.0's filesystem and shell contracts over
-one authenticated Drive9 SDK client and one ordinary Drive9 root. Files written
-through the environment are visible to Runtime commands, and command writes are
-visible through the same file API. The constructor intentionally accepts no
-second Runtime client, so callers cannot accidentally combine two tenants or
-namespace views.
+one authenticated Drive9 SDK client and one Drive9 drive. Files written under
+the configured start root are visible to Runtime commands, and command writes
+there are visible through the same file API. The constructor intentionally
+accepts no second Runtime client, so callers cannot accidentally combine two
+tenants or namespace views.
+
+> **Runtime access boundary:** filesystem methods confine paths to `root`, but
+> the current Drive9 Runtime mounts the whole authenticated drive. For exec,
+> `root` selects the command's starting directory; it is not a sandbox ACL, and
+> a command can traverse to sibling paths elsewhere in that drive. Use a
+> separate Drive9 tenant/drive when untrusted commands require isolation. True
+> per-root exec isolation requires a server-side Runtime capability and is not
+> claimed by this preview adapter.
 
 ```ts
 import { Client } from "drive9";
@@ -457,8 +465,10 @@ pipes, variables, and redirects. `cwd` is resolved from the environment's live
 working directory and must remain inside `root`. Output streams through Pi's
 `onOutput` callback. If either spill threshold is crossed, the complete raw
 arrival-order output is written to a Pi temporary file under the same Drive9
-`tempRoot`; `cleanup()` removes it best-effort. No host shell or host temporary
-directory is used.
+`tempRoot`. Runtime frames are coalesced into 8 MiB-aligned Drive9 appends, with
+one final partial append at a known terminal result, so large output does not
+turn every frame into a read-modify-upload cycle. `cleanup()` removes the spill
+best-effort. No host shell or host temporary directory is used.
 
 The adapter never retries. Confirmed cancel, timeout, Runtime-unavailable, busy,
 start-failure, and outcome-unknown states map to Pi's typed execution errors;

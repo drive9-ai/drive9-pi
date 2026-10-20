@@ -2,7 +2,8 @@
  * Real-backend acceptance for Drive9 Runtime exec (task #282, V1 ordinary root).
  *
  * One SDK Client object backs both halves of `Drive9SdkExecutionEnv`. The gate
- * proves bidirectional same-root visibility without a host fallback:
+ * proves bidirectional visibility under the configured start root without a
+ * host fallback. It does not claim that Runtime access is confined to root:
  *
  *   filesystem write -> Runtime read
  *   Runtime write -> filesystem read

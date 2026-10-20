@@ -48,15 +48,18 @@ class FakeSpill implements RuntimeSpillSink {
   appendCalls = 0;
   failCreate = false;
   failAppendAt: number | undefined;
+  rejectAbortedContext = false;
 
-  async create(): Promise<string> {
+  async create(context: Context): Promise<string> {
     this.createCalls++;
+    if (this.rejectAbortedContext && context.abortSignal?.aborted) throw new Error("spill context aborted");
     if (this.failCreate) throw new Error("drive9 create rejected");
     return "/ws/.drive9-pi-tmp/runtime-exec-abc.log";
   }
 
-  async append(_path: string, bytes: Uint8Array): Promise<void> {
+  async append(_path: string, bytes: Uint8Array, context: Context): Promise<void> {
     this.appendCalls++;
+    if (this.rejectAbortedContext && context.abortSignal?.aborted) throw new Error("spill context aborted");
     if (this.failAppendAt === this.appendCalls) throw new Error("drive9 append rejected");
     this.appended.push(bytes.slice());
   }
@@ -228,6 +231,7 @@ describe("Drive9RuntimeExec", () => {
       assert.equal(r.value.spillPath, "/ws/.drive9-pi-tmp/runtime-exec-abc.log");
       assert.equal(new TextDecoder().decode(spill.bytes()), "abc\ndef");
       assert.equal(spill.createCalls, 1);
+      assert.equal(spill.appendCalls, 1, "small frames must be coalesced into one terminal append");
     });
 
     it("spills when complete-or-partial line count crosses afterLines", async () => {
@@ -264,44 +268,121 @@ describe("Drive9RuntimeExec", () => {
       assert.equal(new TextDecoder().decode(spill.bytes()), "partial");
     });
 
-    for (const failure of ["create", "append"] as const) {
-      it(`${failure} failure rejects the SDK callback, causes cancel/unknown, and stops later output`, async () => {
-        const client = new FakeClient();
-        const spill = new FakeSpill();
-        if (failure === "create") spill.failCreate = true;
-        else spill.failAppendAt = 1;
-        let cancelAttempts = 0;
-        let laterCallbackRan = false;
-        let outputCalls = 0;
-        client.handler = async (_input, options) => {
-          try {
-            await options.onStdout?.(encoder.encode("first"));
-            laterCallbackRan = true;
-            await options.onStderr?.(encoder.encode("second"));
-            return result();
-          } catch (error) {
-            // This is the #1022 SDK contract: a frame callback failure triggers
-            // a best-effort cancel and is surfaced as outcome_unknown.
-            cancelAttempts++;
-            throw new RuntimeOutcomeUnknownError("runtime stdout callback failed", "execution-1", error);
-          }
-        };
-        const r = await makeExec(client, spill)(
-          "big",
-          {
-            onOutput: () => outputCalls++,
-            spill: { afterBytes: 0, afterLines: 0 },
-          },
-          ctx(),
-        );
-        assert.ok(!r.ok);
-        assert.equal(r.error.code, "unknown");
-        assert.equal(r.error.spillPath, undefined);
-        assert.equal(cancelAttempts, 1);
-        assert.equal(laterCallbackRan, false);
-        assert.equal(outputCalls, 0);
-      });
-    }
+    it("create failure rejects the SDK callback, causes cancel/unknown, and stops later output", async () => {
+      const client = new FakeClient();
+      const spill = new FakeSpill();
+      spill.failCreate = true;
+      let cancelAttempts = 0;
+      let laterCallbackRan = false;
+      let outputCalls = 0;
+      client.handler = async (_input, options) => {
+        try {
+          await options.onStdout?.(encoder.encode("first"));
+          laterCallbackRan = true;
+          await options.onStderr?.(encoder.encode("second"));
+          return result();
+        } catch (error) {
+          // This is the #1022 SDK contract: a frame callback failure triggers
+          // a best-effort cancel and is surfaced as outcome_unknown.
+          cancelAttempts++;
+          throw new RuntimeOutcomeUnknownError("runtime stdout callback failed", "execution-1", error);
+        }
+      };
+      const r = await makeExec(client, spill)(
+        "big",
+        {
+          onOutput: () => outputCalls++,
+          spill: { afterBytes: 0, afterLines: 0 },
+        },
+        ctx(),
+      );
+      assert.ok(!r.ok);
+      assert.equal(r.error.code, "unknown");
+      assert.equal(r.error.spillPath, undefined);
+      assert.equal(cancelAttempts, 1);
+      assert.equal(laterCallbackRan, false);
+      assert.equal(outputCalls, 0);
+    });
+
+    it("full-batch append failure rejects the SDK callback and causes cancel/unknown", async () => {
+      const client = new FakeClient();
+      const spill = new FakeSpill();
+      spill.failAppendAt = 1;
+      let cancelAttempts = 0;
+      let laterCallbackRan = false;
+      client.handler = async (_input, options) => {
+        try {
+          await options.onStdout?.(new Uint8Array(8 * 1024 * 1024));
+          laterCallbackRan = true;
+          return result();
+        } catch (error) {
+          cancelAttempts++;
+          throw new RuntimeOutcomeUnknownError("runtime stdout callback failed", "execution-1", error);
+        }
+      };
+      const r = await makeExec(client, spill)(
+        "big",
+        { spill: { afterBytes: 0, afterLines: Number.MAX_SAFE_INTEGER } },
+        ctx(),
+      );
+      assert.ok(!r.ok);
+      assert.equal(r.error.code, "unknown");
+      assert.equal(r.error.spillPath, undefined);
+      assert.equal(cancelAttempts, 1);
+      assert.equal(laterCallbackRan, false);
+    });
+
+    it("coalesces tens of MiB of small frames into aligned 8 MiB appends plus one tail", async () => {
+      const client = new FakeClient();
+      const spill = new FakeSpill();
+      const frame = new Uint8Array(64 * 1024).fill(0x61);
+      const frameCount = 512; // 32 MiB total before the final tail.
+      const tail = encoder.encode("tail");
+      client.handler = async (_input, options) => {
+        for (let index = 0; index < frameCount; index++) await options.onStdout?.(frame);
+        await options.onStderr?.(tail);
+        return result();
+      };
+      const r = await makeExec(client, spill)(
+        "large-output",
+        { spill: { afterBytes: 0, afterLines: Number.MAX_SAFE_INTEGER } },
+        ctx(),
+      );
+      assert.ok(r.ok);
+      assert.equal(spill.createCalls, 1);
+      assert.equal(spill.appendCalls, 5, "512 Runtime frames must not become 512 Drive9 appends");
+      assert.deepEqual(spill.appended.map((part) => part.byteLength), [
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+        tail.byteLength,
+      ]);
+      assert.equal(
+        spill.appended.reduce((total, part) => total + part.byteLength, 0),
+        frameCount * frame.byteLength + tail.byteLength,
+      );
+      assert.equal(new TextDecoder().decode(spill.appended.at(-1)), "tail");
+    });
+
+    it("maps a final partial-batch append failure after terminal to unknown without publishing spillPath", async () => {
+      const client = new FakeClient();
+      const spill = new FakeSpill();
+      spill.failAppendAt = 1;
+      client.handler = async (_input, options) => {
+        await options.onStdout?.(encoder.encode("short"));
+        return result();
+      };
+      const r = await makeExec(client, spill)(
+        "short-output",
+        { spill: { afterBytes: 0, afterLines: Number.MAX_SAFE_INTEGER } },
+        ctx(),
+      );
+      assert.ok(!r.ok);
+      assert.equal(r.error.code, "unknown");
+      assert.equal(r.error.spillPath, undefined);
+      assert.equal(spill.appendCalls, 1);
+    });
 
     it("propagates a spill failure through the real SDK callback-cancel path", async () => {
       let cancelAttempts = 0;
@@ -347,7 +428,7 @@ describe("Drive9RuntimeExec", () => {
       const address = server.address() as AddressInfo;
       const client = new Client(`http://127.0.0.1:${address.port}`, "test-key");
       const spill = new FakeSpill();
-      spill.failAppendAt = 1;
+      spill.failCreate = true;
       let outputCalls = 0;
       try {
         const r = await makeExec(client, spill)(
@@ -454,6 +535,32 @@ describe("Drive9RuntimeExec", () => {
         assert.deepEqual(output, ["�"]);
       });
     }
+
+    it("flushes a confirmed cancel tail with an abort-detached spill context", async () => {
+      const controller = new AbortController();
+      const context = {
+        abortSignal: controller.signal,
+        value: () => undefined,
+        toString: () => "test context",
+      } as Context;
+      const client = new FakeClient();
+      const spill = new FakeSpill();
+      spill.rejectAbortedContext = true;
+      client.handler = async (_input, options) => {
+        await options.onStdout?.(encoder.encode("captured-before-cancel"));
+        controller.abort();
+        throw new RuntimeCanceledError("canceled", "execution-1");
+      };
+      const r = await makeExec(client, spill)(
+        "x",
+        { spill: { afterBytes: 0, afterLines: Number.MAX_SAFE_INTEGER } },
+        context,
+      );
+      assert.ok(!r.ok);
+      assert.equal(r.error.code, "aborted");
+      assert.equal(r.error.spillPath, "/ws/.drive9-pi-tmp/runtime-exec-abc.log");
+      assert.equal(new TextDecoder().decode(spill.bytes()), "captured-before-cancel");
+    });
   });
 
   describe("error mapping and spillPath scope", () => {
