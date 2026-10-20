@@ -21,8 +21,8 @@ export interface RuntimeShellOptions {
     client: Drive9RuntimeExecClient;
     /** Drive9 absolute root; becomes Runtime `workspace.root`. */
     root: string;
-    /** Drive9 absolute default cwd (inside root); used when ShellExecOptions.cwd is undefined. */
-    cwd: string;
+    /** Read the env's live Drive9 cwd for every exec call. */
+    currentCwd(): string;
     spill: RuntimeSpillSink;
 }
 /**

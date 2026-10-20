@@ -1,14 +1,14 @@
 import type { Context } from "@earendil-works/chord";
 import {
-  err,
-  ExecutionError,
   type ExecutionEnv,
   type Result,
   type ShellExecOptions,
   type ShellExecResult,
+  type ExecutionError,
 } from "@earendil-works/pi-durable/env";
 import {
   Drive9DurableFileSystem,
+  type Drive9DurableFileSystemClient,
   type Drive9DurableFileSystemOptions,
 } from "../drive9-durable-file-system.js";
 import {
@@ -17,15 +17,17 @@ import {
   type RuntimeSpillSink,
 } from "./runtime-shell.js";
 
-export type Drive9SdkExecutionEnvOptions = Drive9DurableFileSystemOptions & {
+/** One authenticated object owns both file access and Runtime execution. */
+export interface Drive9SdkExecutionEnvClient
+  extends Drive9DurableFileSystemClient, Drive9RuntimeExecClient {}
+
+export type Drive9SdkExecutionEnvOptions = Omit<Drive9DurableFileSystemOptions, "client"> & {
   /**
-   * The SAME authenticated Drive9 object that backs the filesystem, also
-   * exposing Runtime `exec`. Supply it to enable ordinary-root shell execution:
-   * a command then addresses the identical namespace as the file tools
-   * (`workspace.root = root`, no `layer_id`). Omit to keep shell execution
-   * fail-closed (`shell_unavailable`).
+   * The SAME authenticated Drive9 object backs file access and Runtime exec.
+   * A command addresses the identical ordinary namespace as the file tools
+   * (`workspace.root = root`, no `layer_id`).
    */
-  runtime?: Drive9RuntimeExecClient;
+  client: Drive9SdkExecutionEnvClient;
 };
 
 /**
@@ -33,35 +35,32 @@ export type Drive9SdkExecutionEnvOptions = Drive9DurableFileSystemOptions & {
  *
  * The filesystem and the shell share ONE authenticated client and the same
  * ordinary Drive9 root: a command run through `exec` sees files the agent wrote
- * via the filesystem, and vice versa. Without a `runtime` client, shell
- * execution fails closed; commands never fall through to the host process.
+ * via the filesystem, and vice versa. Commands never fall through to the host.
  * LayerFS and the coding-agent host-temp bash path are out of scope
  * (see docs/design/runtime-exec-integration.md).
  */
 export class Drive9SdkExecutionEnv extends Drive9DurableFileSystem implements ExecutionEnv {
-  readonly #exec?: ReturnType<typeof createDrive9RuntimeExec>;
+  readonly #exec: ReturnType<typeof createDrive9RuntimeExec>;
 
   constructor(options: Drive9SdkExecutionEnvOptions) {
     super(options);
-    if (options.runtime !== undefined) {
-      const spill: RuntimeSpillSink = {
-        create: async (context) => {
-          const created = await this.createTempFile({ prefix: "runtime-exec-", suffix: ".log" }, context);
-          if (!created.ok) throw created.error;
-          return created.value;
-        },
-        append: async (path, bytes, context) => {
-          const appended = await this.appendFile(path, bytes, context);
-          if (!appended.ok) throw appended.error;
-        },
-      };
-      this.#exec = createDrive9RuntimeExec({
-        client: options.runtime,
-        root: this.root,
-        cwd: this.cwd,
-        spill,
-      });
-    }
+    const spill: RuntimeSpillSink = {
+      create: async (context) => {
+        const created = await this.createTempFile({ prefix: "runtime-exec-", suffix: ".log" }, context);
+        if (!created.ok) throw created.error;
+        return created.value;
+      },
+      append: async (path, bytes, context) => {
+        const appended = await this.appendFile(path, bytes, context);
+        if (!appended.ok) throw appended.error;
+      },
+    };
+    this.#exec = createDrive9RuntimeExec({
+      client: options.client,
+      root: this.root,
+      currentCwd: () => this.cwd,
+      spill,
+    });
   }
 
   async exec(
@@ -69,15 +68,6 @@ export class Drive9SdkExecutionEnv extends Drive9DurableFileSystem implements Ex
     options: ShellExecOptions | undefined,
     context: Context,
   ): Promise<Result<ShellExecResult, ExecutionError>> {
-    if (this.#exec === undefined) {
-      if (context.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
-      return err(
-        new ExecutionError(
-          "shell_unavailable",
-          "Drive9SdkExecutionEnv has no Runtime client; shell execution is unavailable",
-        ),
-      );
-    }
     return await this.#exec(command, options, context);
   }
 }

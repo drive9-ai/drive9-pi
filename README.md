@@ -425,11 +425,47 @@ repair; this preview does not promise automatic crash-tail recovery.
 
 ### SDK execution environment (preview)
 
-`Drive9SdkExecutionEnv` exposes the same Drive9 filesystem namespace through
-Pi 1.0's `ExecutionEnv` contract for file-only agents. Its `exec()` method
-always returns `shell_unavailable`; it never starts or falls back to a host
-process, even when callers provide a working directory, environment variables,
-or output callback.
+`Drive9SdkExecutionEnv` combines Pi 1.0's filesystem and shell contracts over
+one authenticated Drive9 SDK client and one ordinary Drive9 root. Files written
+through the environment are visible to Runtime commands, and command writes are
+visible through the same file API. The constructor intentionally accepts no
+second Runtime client, so callers cannot accidentally combine two tenants or
+namespace views.
+
+```ts
+import { Client } from "drive9";
+import { Drive9SdkExecutionEnv } from "@drive9/drive9-pi";
+
+const client = Client.defaultClient();
+const environment = new Drive9SdkExecutionEnv({
+  client,
+  root: "/workspaces/my-project",
+});
+
+const result = await environment.exec(
+  "npm test",
+  {
+    onOutput: (text) => process.stdout.write(text),
+    spill: { afterBytes: 256_000, afterLines: 2_000 },
+  },
+  context,
+);
+```
+
+Commands are passed as Drive9 SDK `command` strings, preserving shell quoting,
+pipes, variables, and redirects. `cwd` is resolved from the environment's live
+working directory and must remain inside `root`. Output streams through Pi's
+`onOutput` callback. If either spill threshold is crossed, the complete raw
+arrival-order output is written to a Pi temporary file under the same Drive9
+`tempRoot`; `cleanup()` removes it best-effort. No host shell or host temporary
+directory is used.
+
+The adapter never retries. Confirmed cancel, timeout, Runtime-unavailable, busy,
+start-failure, and outcome-unknown states map to Pi's typed execution errors;
+an unconfirmed cancel remains `unknown`. Invalid timeout, environment, cwd, or
+spill options fail before a Runtime request. See
+[`docs/design/runtime-exec-integration.md`](docs/design/runtime-exec-integration.md)
+for the complete mapping and spill lifecycle.
 
 Repository maintainers can run the required-mode acknowledgement gate against
 an authenticated real Drive9 backend:
@@ -449,7 +485,25 @@ path. The environment remains preview because this adapter's SDK/HTTP profile
 exposes no public truncate-to-N primitive (the Drive9 server itself can truncate
 to any length over a FUSE mount, but that is a separate ExecutionEnv) and the
 package-wide stable durable runtime still requires a server-enforced state-writer
-epoch. Use it only when an unavailable shell is the intended execution policy.
+epoch.
+
+Runtime delivery has an additional required, no-skip gate against a
+Runtime-enabled backend:
+
+```bash
+DRIVE9_E2E_REQUIRED=1 npm run e2e:runtime-exec
+```
+
+It uses one SDK client, proves filesystem-to-command and command-to-filesystem
+visibility in a unique ordinary root, then removes and verifies that whole
+remote root. A server without Runtime may skip only when required mode is off;
+that skip is not release evidence.
+
+This V1 does not make the LayerFS workspace coordinator executable: the package
+does not yet have a file API that addresses a Runtime `layer_id`. The default Pi
+coding-agent extension's process tools also remain fail-closed because its
+large-output accumulator currently targets host temporary storage. Those are
+separate follow-ups, not implicit fallbacks.
 
 ## LayerFS workspace backend (preview)
 

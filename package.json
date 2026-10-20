@@ -35,6 +35,7 @@
     "README.md",
     "LICENSE",
     "docs/design-lock.md",
+    "docs/design/runtime-exec-integration.md",
     "schema/drive9.schema.json",
     "scripts/release-public.sh"
   ],

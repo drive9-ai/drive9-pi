@@ -11,6 +11,7 @@ import {
   isRuntimeOutcomeUnknown,
   RuntimeBusyError,
   RuntimeCanceledError,
+  RuntimeExecutionError,
   RuntimeNotEnabledError,
   RuntimeStartError,
   RuntimeTimeoutError,
@@ -41,8 +42,8 @@ export interface RuntimeShellOptions {
   client: Drive9RuntimeExecClient;
   /** Drive9 absolute root; becomes Runtime `workspace.root`. */
   root: string;
-  /** Drive9 absolute default cwd (inside root); used when ShellExecOptions.cwd is undefined. */
-  cwd: string;
+  /** Read the env's live Drive9 cwd for every exec call. */
+  currentCwd(): string;
   spill: RuntimeSpillSink;
 }
 
@@ -129,7 +130,7 @@ export function createDrive9RuntimeExec(options: RuntimeShellOptions) {
         return err(new ExecutionError("spawn_error", "spill thresholds must be non-negative safe integers"));
       }
     }
-    const cwd = resolveCwd(options.root, options.cwd, shellOptions?.cwd);
+    const cwd = resolveCwd(options.root, options.currentCwd(), shellOptions?.cwd);
     if (cwd.kind === "escape") {
       return err(new ExecutionError("spawn_error", "cwd escapes the workspace root"));
     }
@@ -142,13 +143,14 @@ export function createDrive9RuntimeExec(options: RuntimeShellOptions) {
       ...("ms" in timeout && timeout.ms !== undefined ? { timeout_ms: timeout.ms } : {}),
     };
 
-    // --- Per-stream UTF-8 decoding + bounded prefix + spill ---
+    // --- Per-stream UTF-8 decoding + complete raw spill ---
     const stdoutDecoder = new TextDecoder("utf-8");
     const stderrDecoder = new TextDecoder("utf-8");
     let spillPath: string | undefined;
-    let bytesSeen = 0;
-    const afterBytes = spillOpts?.afterBytes;
-    let spillFailure: Error | undefined;
+    let seenBytes = 0;
+    let seenNewlines = 0;
+    let spilling = false;
+    const spillPrefix: Uint8Array[] = [];
 
     const emit = (text: string) => {
       if (text.length === 0) return;
@@ -165,20 +167,40 @@ export function createDrive9RuntimeExec(options: RuntimeShellOptions) {
       return spillPath;
     };
 
-    const spillBytes = async (bytes: Uint8Array) => {
-      if (spillFailure !== undefined) return;
+    const appendSpill = async (bytes: Uint8Array) => {
       try {
         const path = await ensureSpill();
         await options.spill.append(path, bytes, context);
       } catch (error) {
-        spillFailure = error instanceof Error ? error : new Error(String(error));
+        throw new SpillWriteError(error);
       }
     };
 
+    const startSpill = async (chunk: Uint8Array) => {
+      spilling = true;
+      for (const prefix of spillPrefix) await appendSpill(prefix);
+      spillPrefix.length = 0;
+      await appendSpill(chunk);
+    };
+
     const onChunk = async (chunk: Uint8Array, decoder: TextDecoder) => {
-      bytesSeen += chunk.byteLength;
-      if (afterBytes !== undefined && bytesSeen > afterBytes) {
-        await spillBytes(chunk);
+      if (spillOpts !== undefined && chunk.byteLength > 0) {
+        if (spilling) {
+          await appendSpill(chunk);
+        } else {
+          seenBytes += chunk.byteLength;
+          for (const byte of chunk) {
+            if (byte === 0x0a) seenNewlines++;
+          }
+          const seenLines = seenNewlines + (chunk[chunk.byteLength - 1] === 0x0a ? 0 : 1);
+          if (seenBytes > spillOpts.afterBytes || seenLines > spillOpts.afterLines) {
+            await startSpill(chunk);
+          } else {
+            // The Runtime SDK currently allocates each frame, but copy here so
+            // the complete prefix remains stable for any conforming client.
+            spillPrefix.push(chunk.slice());
+          }
+        }
       }
       emit(decoder.decode(chunk, { stream: true }));
     };
@@ -189,29 +211,33 @@ export function createDrive9RuntimeExec(options: RuntimeShellOptions) {
       onStderr: (chunk) => onChunk(chunk, stderrDecoder),
     };
 
-    let result: ExecResult;
+    let result: ExecResult | undefined;
+    let executionFailed = false;
+    let executionError: unknown;
     try {
       result = await options.client.exec(request, execOptions);
     } catch (error) {
-      return err(mapExecError(error, spillPath));
+      executionFailed = true;
+      executionError = error;
     }
 
-    if (spillFailure !== undefined) {
-      // A spill write failed mid-run; the command's output is not fully captured
-      // and we must not report success. (Best-effort: the request already
-      // completed, so there is nothing to cancel; fail closed as unknown.)
-      return err(new ExecutionError("unknown", `spill write failed: ${spillFailure.message}`, spillFailure));
+    // A successful exit or RuntimeExecutionError is a server terminal outcome.
+    // Flush pending decoder state before publishing that terminal result. Do
+    // not flush an outcome-unknown/callback failure as if it were terminal.
+    if (!executionFailed || executionError instanceof RuntimeExecutionError) {
+      try {
+        emit(stdoutDecoder.decode());
+        emit(stderrDecoder.decode());
+      } catch (error) {
+        const cause = error instanceof CallbackStreamingError ? error.cause : error;
+        return err(new ExecutionError("callback_error", "onOutput threw during terminal flush", toError(cause)));
+      }
     }
 
-    // Terminal reached: flush both decoders. A throw here is post-terminal.
-    try {
-      emit(stdoutDecoder.decode());
-      emit(stderrDecoder.decode());
-    } catch (error) {
-      const cause = error instanceof CallbackStreamingError ? error.cause : error;
-      return err(new ExecutionError("callback_error", "onOutput threw during terminal flush", toError(cause)));
+    if (executionFailed) return err(mapExecError(executionError, spillPath));
+    if (result === undefined) {
+      return err(new ExecutionError("unknown", "runtime returned no result"));
     }
-
     return ok(spillPath === undefined ? { exitCode: result.exitCode } : { exitCode: result.exitCode, spillPath });
   };
 }
@@ -220,6 +246,17 @@ class CallbackStreamingError extends Error {
   constructor(readonly cause: unknown) {
     super("onOutput threw while streaming");
     this.name = "CallbackStreamingError";
+  }
+}
+
+class SpillWriteError extends Error {
+  readonly cause: Error;
+
+  constructor(cause: unknown) {
+    const resolved = toError(cause);
+    super(`spill write failed: ${resolved.message}`, { cause: resolved });
+    this.name = "SpillWriteError";
+    this.cause = resolved;
   }
 }
 
@@ -232,6 +269,9 @@ function toError(value: unknown): Error {
  * `spillPath` is only attached on timeout/aborted (per Pi's ExecutionError.spillPath contract).
  */
 function mapExecError(error: unknown, spillPath: string | undefined): ExecutionError {
+  if (error instanceof SpillWriteError) {
+    return new ExecutionError("unknown", error.message, error.cause);
+  }
   if (error instanceof CallbackStreamingError) {
     // A streaming onOutput throw was caught by the SDK and surfaced here: unknown.
     return new ExecutionError("unknown", "onOutput threw while streaming; command outcome unknown", toError(error.cause));

@@ -1,117 +1,137 @@
 /**
  * Real-backend acceptance for Drive9 Runtime exec (task #282, V1 ordinary root).
  *
- * Proves the "same workspace" promise end-to-end against a real Drive9 server
- * with Runtime enabled:
- *   1. The agent writes a file through `Drive9SdkExecutionEnv` (the filesystem).
- *   2. A command run via `env.exec` (Runtime, ordinary root, no layer_id) SEES
- *      that file at the same relative path.
- *   3. The command writes another file; the filesystem SEES the command's write.
- * This is the discriminating bidirectional-visibility check: a broken binding
- * (different root/sandbox, or a host shell) cannot satisfy both directions.
+ * One SDK Client object backs both halves of `Drive9SdkExecutionEnv`. The gate
+ * proves bidirectional same-root visibility without a host fallback:
  *
- * Uses `Client.defaultClient()` (~/.drive9/config). If the backend is
- * unreachable OR Runtime is not enabled, prints SKIP and exits 0 by default;
- * set DRIVE9_E2E_REQUIRED=1 to make that a failure. No host-shell fallback, no
- * mock: fail closed.
+ *   filesystem write -> Runtime read
+ *   Runtime write -> filesystem read
  *
- * Gate: DRIVE9_E2E_REQUIRED=1 npm run e2e:runtime-exec
+ * Cleanup always removes and verifies the unique remote root, including SKIP
+ * and assertion-failure paths. Set DRIVE9_E2E_REQUIRED=1 to turn an unavailable
+ * backend or Runtime capability into a hard failure.
  */
+import { randomUUID } from "node:crypto";
 import { Client, RuntimeNotEnabledError } from "drive9";
 import { Drive9SdkExecutionEnv } from "../src/index.js";
+import { withVerifiedCleanup } from "./verified-cleanup.js";
 
 const REQUIRED = process.env.DRIVE9_E2E_REQUIRED === "1";
+const context = {
+  abortSignal: new AbortController().signal,
+} as unknown as import("@earendil-works/chord").Context;
 
-function fail(message: string): never {
-  process.stderr.write(`FAIL: ${message}\n`);
-  process.exit(1);
+class SkipError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SkipError";
+  }
 }
 
-function skip(message: string): never {
-  if (REQUIRED) fail(`${message} (DRIVE9_E2E_REQUIRED=1)`);
-  process.stdout.write(`SKIP: ${message}\n`);
-  process.exit(0);
+function statusCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const value = (error as { readonly statusCode?: unknown }).statusCode;
+  if (typeof value === "number") return value;
+  const status = (error as { readonly status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
 }
 
-const context = { abortSignal: new AbortController().signal } as unknown as import("@earendil-works/chord").Context;
+function isMissing(error: unknown): boolean {
+  return statusCode(error) === 404 || String(error).toLowerCase().includes("not found");
+}
 
-async function main(): Promise<void> {
+async function cleanupRoot(client: Client, root: string): Promise<void> {
+  try {
+    await client.removeAll(root);
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+  try {
+    await client.stat(root);
+  } catch (error) {
+    if (isMissing(error)) return;
+    throw error;
+  }
+  throw new Error(`cleanup left Runtime E2E root active: ${root}`);
+}
+
+async function configuredClient(): Promise<Client> {
   let client: Client;
   try {
     client = Client.defaultClient();
   } catch (error) {
-    skip(`no Drive9 client configured: ${(error as Error).message}`);
+    throw new SkipError(`no Drive9 client configured: ${String(error)}`, { cause: error });
   }
-
-  const root = `/dev1-runtime-exec-${process.pid}`;
-  // Minimal filesystem client adapter over the SDK (mirrors the demo's shape).
-  const fsClient = makeFsClient(client, root);
-  const env = new Drive9SdkExecutionEnv({ client: fsClient, root, runtime: client });
-
   try {
-    // 1. Agent writes a file via the filesystem.
-    const wrote = await env.writeFile("from-agent.txt", new TextEncoder().encode("hello-from-agent\n"), context);
-    if (!wrote.ok) fail(`filesystem write failed: ${wrote.error.message}`);
-
-    // 2. Command sees the agent's file, and writes one back.
-    let output = "";
-    const exec = await env.exec("cat from-agent.txt && echo cmd-was-here > from-cmd.txt", {
-      onOutput: (text) => {
-        output += text;
-      },
-    }, context);
-    if (!exec.ok) {
-      if (exec.error.cause instanceof RuntimeNotEnabledError || exec.error.code === "shell_unavailable") {
-        skip("Runtime exec not enabled on this server");
-      }
-      fail(`exec failed: ${exec.error.code} ${exec.error.message}`);
+    await client.runtimeCapabilities(context.abortSignal);
+  } catch (error) {
+    if (error instanceof RuntimeNotEnabledError) {
+      throw new SkipError("Runtime exec is not enabled on this server", { cause: error });
     }
-    if (exec.value.exitCode !== 0) fail(`exec exit ${exec.value.exitCode}`);
-    if (!output.includes("hello-from-agent")) fail(`command did not see the agent's file; output=${JSON.stringify(output)}`);
+    throw new SkipError(`Drive9 Runtime backend unavailable: ${String(error)}`, { cause: error });
+  }
+  return client;
+}
 
-    // 3. Filesystem sees the command's write (same root).
-    const back = await env.readTextFile("from-cmd.txt", context);
-    if (!back.ok) fail(`filesystem could not read the command's file: ${back.error.message}`);
-    if (!back.value.includes("cmd-was-here")) fail(`unexpected content from command: ${JSON.stringify(back.value)}`);
+async function run(): Promise<void> {
+  const client = await configuredClient();
+  const root = `/drive9-pi-runtime-exec-e2e-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const environment = new Drive9SdkExecutionEnv({
+    client,
+    root,
+    tempRoot: `${root}/.tmp`,
+    id: `drive9-runtime-e2e:${root}`,
+  });
+  await withVerifiedCleanup(
+    async () => {
+      await client.mkdir(root, 0o700);
+      const wrote = await environment.writeFile(
+        "from-agent.txt",
+        new TextEncoder().encode("hello-from-agent\n"),
+        context,
+      );
+      if (!wrote.ok) throw wrote.error;
 
-    process.stdout.write("PASS: bidirectional same-root visibility (fs→exec and exec→fs)\n");
-  } finally {
-    await env.cleanup(context).catch(() => {});
+      let output = "";
+      const executed = await environment.exec(
+        "cat from-agent.txt && printf 'cmd-was-here\\n' > from-cmd.txt",
+        { onOutput: (text) => { output += text; } },
+        context,
+      );
+      if (!executed.ok) {
+        if (executed.error.cause instanceof RuntimeNotEnabledError || executed.error.code === "shell_unavailable") {
+          throw new SkipError("Runtime exec became unavailable after capability preflight", { cause: executed.error });
+        }
+        throw executed.error;
+      }
+      if (executed.value.exitCode !== 0) {
+        throw new Error(`Runtime command exited ${executed.value.exitCode}`);
+      }
+      if (output !== "hello-from-agent\n") {
+        throw new Error(`Runtime did not see the filesystem write: ${JSON.stringify(output)}`);
+      }
+
+      const readBack = await environment.readTextFile("from-cmd.txt", context);
+      if (!readBack.ok) throw readBack.error;
+      if (readBack.value !== "cmd-was-here\n") {
+        throw new Error(`filesystem did not see the Runtime write: ${JSON.stringify(readBack.value)}`);
+      }
+    },
+    async () => {
+      await environment.cleanup(context);
+      await cleanupRoot(client, root);
+    },
+  );
+  process.stdout.write("PASS: one Drive9 client has bidirectional filesystem/Runtime visibility and cleanup is verified\n");
+}
+
+try {
+  await run();
+} catch (error) {
+  if (error instanceof SkipError && !REQUIRED) {
+    process.stdout.write(`SKIP: ${error.message}\n`);
+  } else {
+    process.stderr.write(`FAIL: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
   }
 }
-
-/** The SDK Client exposes file ops; adapt the subset Drive9DurableFileSystem needs, rooted at `root`. */
-function makeFsClient(client: Client, root: string): import("../src/drive9-durable-file-system.js").Drive9DurableFileSystemClient {
-  const abs = (p: string) => (p.startsWith("/") ? p : `${root}/${p}`);
-  return {
-    read: (p) => client.read(abs(p)),
-    write: async (p, data) => {
-      await client.write(abs(p), data);
-    },
-    append: async (p, data) => {
-      await client.append(abs(p), data);
-    },
-    list: async (p) => (await client.list(abs(p))).map((e) => ({ name: e.name, size: e.size, isDir: e.isDir })),
-    stat: async (p) => {
-      const s = await client.stat(abs(p));
-      return { size: s.size, isDir: s.isDir, revision: s.revision };
-    },
-    rename: async (from, to) => {
-      await client.rename(abs(from), abs(to));
-    },
-    mkdir: async (p) => {
-      await client.mkdir(abs(p));
-    },
-    deleteFile: async (p) => {
-      await client.delete(abs(p));
-    },
-    deleteDir: async (p) => {
-      await client.delete(abs(p));
-    },
-    removeAll: async (p) => {
-      await client.delete(abs(p));
-    },
-  };
-}
-
-void main().catch((error) => fail((error as Error).message));

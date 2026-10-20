@@ -1,10 +1,10 @@
 # Pi × Drive9 Design Lock
 
-This document locks two separate surfaces. The existing Pi 0.x-compatible
+This document locks three separate surfaces. The existing Pi 0.x-compatible
 extension and live-filesystem adapter remain the default public path. The Pi
-1.0 LayerFS workspace backend is an explicit low-level preview surface; it does
-not change the default extension or promote the missing durability primitives
-listed below to stable support.
+1.0 SDK execution environment and LayerFS workspace backend are explicit
+preview surfaces; neither changes the default extension nor promotes the
+missing durability primitives listed below to stable support.
 
 ## 1. Product Contract
 
@@ -13,17 +13,16 @@ The default Pi 0.x-compatible extension provides two capabilities:
 1. a durable SDK-backed filesystem;
 2. a durable tool-result evidence store.
 
-Drive9 does not provide compute, a shell, a sandbox, a process runner, FUSE,
-or a general-purpose `ExecutionEnv` compositor. The primary customer entrypoint
-is a standard Pi package extension. It replaces Pi coding-agent filesystem
-operations with Drive9 operations while users keep the ordinary `pi` install
-and startup flow. In Drive9 mode, host process tools fail closed rather than
-operating in a different filesystem world.
+The default package extension does not wire compute, a shell, a process runner,
+FUSE, or a general-purpose `ExecutionEnv` compositor. It replaces Pi
+coding-agent filesystem operations with Drive9 operations while users keep the
+ordinary `pi` install and startup flow. Its host process tools fail closed
+rather than operating in a different filesystem world. Drive9 Runtime is
+available only through the separate Pi 1.0 SDK execution environment below.
 
 For Pi 1.0, the package also exports a preview `Drive9SdkExecutionEnv`. It is
-the same SDK-backed filesystem namespace plus a Shell implementation that
-always returns typed `shell_unavailable`; it is not a command runner or a host
-fallback.
+an SDK-backed filesystem plus a Runtime-backed shell over the same authenticated
+client and exact ordinary Drive9 root. It never falls back to a host process.
 
 `createDrive9PiIntegration` remains a lower-level agent-core preset. It binds
 Pi's harness read/write/edit/list tools to a private file-only environment,
@@ -91,13 +90,23 @@ durability and fencing contracts. In particular, it does not claim:
 ### 1.2 Pi 1.0 SDK Execution Environment Preview Contract
 
 `Drive9SdkExecutionEnv` implements Pi 1.0's public `ExecutionEnv` without
-inventing compute:
+inventing a second namespace or host fallback:
 
 - every filesystem operation is inherited from `Drive9DurableFileSystem`;
-- `ExecutionEnv.id` is the exact Drive9 filesystem namespace identity;
-- `exec()` returns `shell_unavailable` and never starts or inherits a host
-  process; and
-- an already-aborted context returns `aborted` before any other result.
+- one injected client object must satisfy both the filesystem and Runtime exec
+  contracts; a separate Runtime client is not accepted;
+- Runtime receives `workspace.root = environment.root` and no `layer_id`;
+- commands are passed unchanged through the SDK `command` field, cwd is read
+  live and contained within the root, and no host environment is copied;
+- output uses independent streaming UTF-8 decoders and, when either byte or
+  complete-or-partial-line threshold is crossed, spills the complete raw
+  arrival-order stream into the same Drive9 `tempRoot` with backpressure;
+- spill failure triggers the SDK callback-cancel/unknown path and never degrades
+  to host temporary storage or success;
+- confirmed terminal errors map to Pi's typed error surface, every unknown
+  outcome remains fail-closed and is never retried, and only confirmed timeout
+  or cancel errors may carry the temporary `spillPath`; and
+- an already-aborted context returns `aborted` before any Runtime call.
 
 The repository's required-mode real-backend gate proves that acknowledged SDK
 write and append bytes are immediately retrievable by a fresh Node process with
@@ -109,6 +118,13 @@ This closes the acknowledgement-visibility gate for the tested SDK/server path;
 it does not by itself make the direct-SDK durability profile stable. Native
 nonzero truncate and a server-enforced state-writer epoch for stable durable
 runtime composition remain prerequisites.
+
+The Runtime release gate additionally requires a published Drive9 SDK that
+contains the Runtime API and a no-skip, real-backend test proving bidirectional
+visibility through one client and one ordinary root, with verified remote-root
+cleanup. LayerFS execution and the default coding-agent extension's host-temp
+bash path remain explicitly out of scope. The complete contract is in
+`docs/design/runtime-exec-integration.md`.
 
 ### 1.3 Pi 1.0 State Storage Preview Contract
 
@@ -331,9 +347,11 @@ A releasable head must prove:
     deterministic-create conflicts, validates fenced binding receipts, uses
     non-cascading logical abandon, and keeps generated layer IDs within the
     server contract;
-12. the preview SDK execution environment shares the filesystem namespace id,
-    returns typed `shell_unavailable` for every command without invoking a
-    process, and preserves cancellation precedence;
+12. the preview SDK execution environment requires one file-plus-Runtime client,
+    binds one ordinary root, reads cwd live, preserves command/env/timeout/error
+    semantics without retry, spills complete raw output into the same Drive9
+    temp root without host fallback, and has a no-skip real-backend gate proving
+    bidirectional file visibility and verified cleanup;
 13. the preview JSONL storage passes Pi `StorageConformance`, reopens committed
     state, exposes `single-coordinator-preview`, requires either explicit
     external exclusivity or the opt-in revision-CAS cooperative lease, checks
