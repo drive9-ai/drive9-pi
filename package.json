@@ -61,7 +61,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "drive9": "^0.2.0"
+    "drive9": "^0.3.0"
   },
   "peerDependencies": {
     "@earendil-works/chord": "1.0.0",
