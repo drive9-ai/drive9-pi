@@ -8,7 +8,7 @@ import type {
 } from "../src/index.js";
 
 describe("public package contract", () => {
-  it("exports SDK filesystem, file-only execution environment, and evidence capabilities", () => {
+  it("exports SDK filesystem, Runtime execution environment, and evidence capabilities", () => {
     assert.equal(typeof packageExports.createDrive9PiIntegration, "function");
     assert.equal(typeof packageExports.createDrive9FileTools, "function");
     assert.equal(typeof packageExports.createDrive9CodingAgentTools, "function");

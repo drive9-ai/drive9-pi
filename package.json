@@ -35,6 +35,7 @@
     "README.md",
     "LICENSE",
     "docs/design-lock.md",
+    "docs/design/runtime-exec-integration.md",
     "schema/drive9.schema.json",
     "scripts/release-public.sh"
   ],
@@ -53,13 +54,14 @@
     "test": "tsx --test test/*.test.ts",
     "release:check": "bash scripts/release-public.sh --check",
     "release:publish": "bash scripts/release-public.sh --publish",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "e2e:runtime-exec": "tsx e2e/runtime-exec-sameroot.ts"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "drive9": "^0.2.0"
+    "drive9": "^0.3.0"
   },
   "peerDependencies": {
     "@earendil-works/chord": "1.0.0",

@@ -1,7 +1,8 @@
 export { Drive9FileSystem, type Drive9FileEntry, type Drive9FileSystemClient, type Drive9FileSystemOptions, type Drive9Stat, } from "./drive9-file-system.js";
 export { Drive9DurableFileSystem, type Drive9DurableFileSystemClient, type Drive9DurableFileSystemOptions, } from "./drive9-durable-file-system.js";
 export { Drive9ProtocolError, type Drive9ProtocolErrorCode, } from "./core/errors.js";
-export { Drive9SdkExecutionEnv, type Drive9SdkExecutionEnvOptions, } from "./environment/sdk-environment.js";
+export { Drive9SdkExecutionEnv, type Drive9SdkExecutionEnvClient, type Drive9SdkExecutionEnvOptions, } from "./environment/sdk-environment.js";
+export type { Drive9RuntimeExecClient } from "./environment/runtime-shell.js";
 export { createDrive9DurableExtension, DRIVE9_DURABLE_EXTENSION_NAME, type Drive9DurableExtensionOptions, } from "./extension/durable-extension.js";
 export { openDrive9SingleCoordinatorStorage, type Drive9SingleCoordinatorStorageOptions, } from "./storage/jsonl-preview.js";
 export { type Drive9ClientLeasePreviewOptions, } from "./storage/client-lease.js";
