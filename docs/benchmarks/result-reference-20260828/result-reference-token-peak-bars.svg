@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1350" viewBox="0 0 2400 1350">
+  <rect width="100%" height="100%" fill="#f8fafc"/>
+  <text x="170" y="82" font-size="58" font-weight="800" fill="#111827">Drive9 Result References: Peak Context Tokens</text>
+  <text x="170" y="132" font-size="34" fill="#526174">Concrete tool-result tasks, fixed tokenizer estimate</text>
+  <rect x="170" y="185" width="2140" height="715" fill="#ffffff" stroke="#d8dee9" stroke-width="2" rx="18"/>
+  <line x1="170" y1="900" x2="2310" y2="900" stroke="#d9dee8" stroke-width="2"/><text x="148" y="909" text-anchor="end" font-size="30" fill="#5b6472">100</text>
+<line x1="170" y1="721.25" x2="2310" y2="721.25" stroke="#d9dee8" stroke-width="2"/><text x="148" y="730.25" text-anchor="end" font-size="30" fill="#5b6472">1.0K</text>
+<line x1="170" y1="542.5" x2="2310" y2="542.5" stroke="#d9dee8" stroke-width="2"/><text x="148" y="551.5" text-anchor="end" font-size="30" fill="#5b6472">10K</text>
+<line x1="170" y1="363.75" x2="2310" y2="363.75" stroke="#d9dee8" stroke-width="2"/><text x="148" y="372.75" text-anchor="end" font-size="30" fill="#5b6472">100K</text>
+  <line x1="170" y1="900" x2="2310" y2="900" stroke="#9aa4b2" stroke-width="3"/>
+  <text x="65" y="542.5" transform="rotate(-90 65 542.5)" text-anchor="middle" font-size="32" font-weight="700" fill="#334155">estimated input tokens (log scale)</text>
+  <rect x="279.5" y="272.48025648014175" width="92" height="627.5197435198583" fill="#dc6b4a" rx="10"/>
+<text x="325.5" y="254.48025648014175" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">324K</text>
+<rect x="391.5" y="769.8067614637055" width="92" height="130.19323853629453" fill="#2563eb" rx="10"/>
+<text x="437.5" y="751.8067614637055" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">535</text>
+<rect x="503.5" y="670.4887029423717" width="92" height="229.51129705762833" fill="#15936b" rx="10"/>
+<text x="549.5" y="652.4887029423717" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">1.9K</text>
+<text x="437.5" y="958" text-anchor="middle" font-size="35" font-weight="700" fill="#172033">go test log</text>
+<text x="437.5" y="1003" text-anchor="middle" font-size="27" fill="#687386">1 output, 4 retrieval calls</text>
+<text x="437.5" y="1043" text-anchor="middle" font-size="27" fill="#687386">99.41% less than inline</text>
+<rect x="814.5" y="303.94914275636063" width="92" height="596.0508572436394" fill="#dc6b4a" rx="10"/>
+<text x="860.5" y="285.94914275636063" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">216K</text>
+<rect x="926.5" y="772.7644578088871" width="92" height="127.23554219111293" fill="#2563eb" rx="10"/>
+<text x="972.5" y="754.7644578088871" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">515</text>
+<rect x="1038.5" y="671.8324525040325" width="92" height="228.16754749596748" fill="#15936b" rx="10"/>
+<text x="1084.5" y="653.8324525040325" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">1.9K</text>
+<text x="972.5" y="958" text-anchor="middle" font-size="35" font-weight="700" fill="#172033">tsc build log</text>
+<text x="972.5" y="1003" text-anchor="middle" font-size="27" fill="#687386">1 output, 4 retrieval calls</text>
+<text x="972.5" y="1043" text-anchor="middle" font-size="27" fill="#687386">99.13% less than inline</text>
+<rect x="1349.5" y="247.50284131299986" width="92" height="652.4971586870001" fill="#dc6b4a" rx="10"/>
+<text x="1395.5" y="229.50284131299986" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">447K</text>
+<rect x="1461.5" y="773.8268614292494" width="92" height="126.17313857075055" fill="#2563eb" rx="10"/>
+<text x="1507.5" y="755.8268614292494" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">508</text>
+<rect x="1573.5" y="705.369034412548" width="92" height="194.630965587452" fill="#15936b" rx="10"/>
+<text x="1619.5" y="687.369034412548" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">1.2K</text>
+<text x="1507.5" y="958" text-anchor="middle" font-size="35" font-weight="700" fill="#172033">repo-wide rg</text>
+<text x="1507.5" y="1003" text-anchor="middle" font-size="27" fill="#687386">1 output, 2 retrieval calls</text>
+<text x="1507.5" y="1043" text-anchor="middle" font-size="27" fill="#687386">99.73% less than inline</text>
+<rect x="1884.5" y="215.50160061128656" width="92" height="684.4983993887134" fill="#dc6b4a" rx="10"/>
+<text x="1930.5" y="217" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">675K</text>
+<rect x="1996.5" y="646.0060086914475" width="92" height="253.9939913085525" fill="#2563eb" rx="10"/>
+<text x="2042.5" y="628.0060086914475" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">2.6K</text>
+<rect x="2108.5" y="601.3606598537463" width="92" height="298.63934014625374" fill="#15936b" rx="10"/>
+<text x="2154.5" y="583.3606598537463" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2937">4.7K</text>
+<text x="2042.5" y="958" text-anchor="middle" font-size="35" font-weight="700" fill="#172033">5-round task</text>
+<text x="2042.5" y="1003" text-anchor="middle" font-size="27" fill="#687386">5 outputs, 6 retrieval calls</text>
+<text x="2042.5" y="1043" text-anchor="middle" font-size="27" fill="#687386">99.31% less than inline</text>
+  <rect x="170" y="1115" width="32" height="32" fill="#dc6b4a" rx="7"/><text x="218" y="1142" font-size="31" fill="#2d3748">Full inline result</text>
+<rect x="610" y="1115" width="32" height="32" fill="#2563eb" rx="7"/><text x="658" y="1142" font-size="31" fill="#2d3748">Drive9 reference</text>
+<rect x="1050" y="1115" width="32" height="32" fill="#15936b" rx="7"/><text x="1098" y="1142" font-size="31" fill="#2d3748">Reference + fetched snippets</text>
+  <text x="170" y="1240" font-size="28" fill="#526174">Tokenizer: gpt-tokenizer@4.0.0, gpt-4o vocabulary. Shared system/user prompt overhead excluded. These are benchmark estimates, not provider-billed usage.</text>
+  <text x="170" y="1286" font-size="28" fill="#526174">Source: drive9-pi 988b80f, 2026-08-28. Fetched snippets are only the bounded slices returned by result_search/result_read.</text>
+</svg>

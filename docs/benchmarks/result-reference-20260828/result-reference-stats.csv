@@ -1,0 +1,6 @@
+scenario,raw_tool_result_bytes,model_visible_reference_bytes,reduction_percent,result_search_bytes_for_5_facts,result_read_bytes_for_5_pages
+74KB output,73695,2048,97.22,3179,5755
+1.47MB output,1470195,2048,99.86,3205,5786
+7.35MB output,7350195,2048,99.97,3220,5805
+5x 1.47MB cumulative,7350975,10240,99.86,3205,5786
+5x 1.47MB cumulative including search+read,7350975,19231,99.74,3205,5786
